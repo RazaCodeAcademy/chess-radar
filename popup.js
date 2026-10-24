@@ -1,0 +1,633 @@
+const $ = (id) => document.getElementById(id);
+const send = (type) => chrome.runtime.sendMessage({ type });
+
+let settings = {};
+
+function applySettings(saved = {}) {
+  settings = {
+    username: "",
+    intervalSec: 60,
+    notificationsEnabled: true,
+    notifyOnline: false,
+    notifyResults: true,
+    tiltLimit: 3,
+    evalBar: true,
+    bestMove: true,
+    analyzeGame: true,
+    followNextGame: true,
+    ...saved,
+    watchedPlayers: saved.watchedPlayers || saved.manualFriends || [],
+    hiddenPlayers: saved.hiddenPlayers || [],
+    timeclasses: { bullet: true, blitz: true, rapid: true, daily: true, ...(saved.timeclasses || {}) },
+  };
+}
+
+function fillSettingsForm() {
+  $("username").value = settings.username;
+  $("interval").value = String(settings.intervalSec);
+  $("tiltLimit").value = String(settings.tiltLimit);
+  $("notifyOnline").checked = settings.notifyOnline;
+  $("notifyResults").checked = settings.notifyResults;
+  $("evalBar").checked = settings.evalBar;
+  $("bestMove").checked = settings.bestMove;
+  $("analyzeGame").checked = settings.analyzeGame;
+  $("followNextGame").checked = settings.followNextGame;
+  for (const box of $("timeclasses").querySelectorAll("input")) {
+    box.checked = settings.timeclasses[box.value] !== false;
+  }
+}
+
+async function renderData() {
+  const data = await chrome.storage.local.get(["statuses", "lastCheck", "myStats", "nextCheck", "apiFriends", "scrapedFriends"]);
+  nextCheck = data.nextCheck || 0;
+  renderBell();
+  renderStats(data.myStats);
+  renderPlayers(data.statuses || {}, data.apiFriends || [], data.scrapedFriends || []);
+  lastCheck = data.lastCheck || 0;
+  renderStatus();
+}
+
+async function load() {
+  const { settings: saved } = await chrome.storage.local.get("settings");
+  applySettings(saved);
+  fillSettingsForm();
+  await renderData();
+}
+
+let lastCheck = 0;
+let nextCheck = 0;
+let refreshing = false;
+
+function timeAgo(ms) {
+  const sec = Math.round((Date.now() - ms) / 1000);
+  if (sec < 10) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  return `${Math.round(min / 60)} h ago`;
+}
+
+function renderStatus() {
+  const dot = $("statusDot");
+  if (refreshing) {
+    dot.className = "status-dot busy";
+    $("meta").textContent = "Refreshing…";
+    $("metaSub").textContent = "Checking players and stats";
+    return;
+  }
+  if (!lastCheck) {
+    dot.className = "status-dot";
+    $("meta").textContent = "Not checked yet";
+    $("metaSub").textContent = "Press Refresh to check now";
+    return;
+  }
+  const stale = Date.now() - lastCheck > Math.max(60, settings.intervalSec || 60) * 2000;
+  dot.className = `status-dot ${stale ? "stale" : "fresh"}`;
+  $("meta").textContent = `Updated ${timeAgo(lastCheck)}`;
+  const left = Math.ceil((nextCheck - Date.now()) / 1000);
+  const next = left > 0 ? `next in ${left >= 60 ? `${Math.ceil(left / 60)} min` : `${left}s`}` : "next check soon";
+  $("metaSub").textContent = `${new Date(lastCheck).toLocaleTimeString()} · ${next}`;
+}
+
+setInterval(renderStatus, 1000);
+
+function signed(n) {
+  return n > 0 ? `+${n}` : String(n);
+}
+
+function renderStats(stats) {
+  if (!stats || !settings.username) {
+    $("statsSection").hidden = true;
+    return;
+  }
+  $("statsSection").hidden = false;
+
+  const box = $("ratings");
+  box.replaceChildren();
+  for (const tc of ["bullet", "blitz", "rapid", "daily"]) {
+    const r = stats.ratings?.[tc];
+    const today = stats.session?.byClass?.[tc];
+    const card = document.createElement("div");
+    card.className = "rating";
+    card.title = r?.best ? `Best: ${r.best}` : "";
+
+    const label = document.createElement("div");
+    label.className = "tc";
+    label.textContent = tc;
+    const value = document.createElement("div");
+    value.className = "value";
+    value.textContent = r ? r.rating : "–";
+    const delta = document.createElement("div");
+    delta.className = "delta";
+    if (today?.change) {
+      delta.textContent = `${signed(today.change)} today`;
+      delta.classList.add(today.change > 0 ? "up" : "down");
+    } else {
+      delta.textContent = today ? "±0 today" : "\u00a0";
+    }
+
+    const pct = document.createElement("div");
+    pct.className = "pct";
+    if (r?.percentile != null) {
+      pct.innerHTML = '<span class="pct-label">Percentile</span><span class="pct-value"></span>';
+      pct.querySelector(".pct-value").textContent = `${r.percentile}%`;
+      pct.classList.add(r.percentile >= 90 ? "pct-top" : r.percentile >= 50 ? "pct-mid" : "pct-low");
+      const tips = [`Better than ${r.percentile}% of ${tc} players`];
+      if (r.globalRank) tips.push(`Global rank #${r.globalRank.toLocaleString()}`);
+      if (r.best) tips.push(`Best rating: ${r.best}`);
+      card.title = tips.join("\n");
+    } else {
+      pct.innerHTML = '<span class="pct-label">Percentile</span><span class="pct-value">–</span>';
+    }
+    card.append(label, value, delta, pct);
+    box.append(card);
+  }
+
+  const s = stats.session;
+  const p = $("session");
+  p.replaceChildren();
+  if (!s?.total) {
+    p.textContent = "No games played today.";
+    return;
+  }
+  p.append(`Today: ${s.total} game${s.total === 1 ? "" : "s"} · ${s.win}W ${s.loss}L ${s.draw}D`);
+  const streak = stats.streak;
+  if (streak && streak.count >= 2) {
+    const span = document.createElement("span");
+    const word = { win: "wins", loss: "losses", draw: "draws" }[streak.outcome];
+    span.textContent = ` · ${streak.count} ${word} in a row`;
+    if (streak.outcome === "loss") span.className = "warn";
+    p.append(span);
+  }
+}
+
+const norm = (name) => String(name || "").trim().toLowerCase();
+const rank = (s) => (s.activity === "playing" ? 0 : s.status !== "offline" ? 1 : 2);
+
+const RATING_ORDER = ["bullet", "blitz", "rapid", "daily"];
+const RATING_ICONS = { bullet: "•", blitz: "⚡", rapid: "◷", daily: "☀" };
+
+function playerRatings(s) {
+  const row = document.createElement("div");
+  row.className = "player-ratings";
+  RATING_ORDER.forEach((tc, i) => {
+    const chip = document.createElement("span");
+    chip.style.gridColumn = String(i + 1);
+    chip.title = tc[0].toUpperCase() + tc.slice(1);
+    const rating = s.ratings?.[tc];
+    const iEl = document.createElement("i");
+    iEl.textContent = RATING_ICONS[tc];
+    if (!rating) {
+      chip.className = `prating prating-empty prating-${tc}`;
+      chip.append(iEl, "----");
+      row.append(chip);
+      return;
+    }
+    chip.className = `prating prating-${tc}`;
+    if (s.activity === "playing" && s.timeclass === tc) chip.classList.add("current");
+    chip.append(iEl, String(rating));
+    row.append(chip);
+  });
+  return row;
+}
+
+function watchUrl(s) {
+  if (!s.url) return s.url;
+  try {
+    const u = new URL(s.url);
+    // Chess.com's ?username= is a play/challenge param and can bounce spectators to /play/online.
+    u.searchParams.delete("username");
+    if (s.username) u.searchParams.set("cfn", s.username);
+    return u.toString();
+  } catch {
+    return s.url;
+  }
+}
+
+function playerRow(s, { removable = false } = {}) {
+  const li = document.createElement("li");
+  const dot = document.createElement("span");
+  dot.className = "dot " + (s.activity === "playing" ? "playing" : s.status !== "offline" ? "online" : "");
+  li.append(dot);
+
+  if (s.avatar) {
+    const img = document.createElement("img");
+    img.src = s.avatar;
+    li.append(img);
+  }
+
+  const info = document.createElement("div");
+  info.className = "player-info";
+  const a = document.createElement("a");
+  a.textContent = s.username;
+  a.href = `https://www.chess.com/member/${s.username}`;
+  a.target = "_blank";
+  info.append(a);
+  info.append(playerRatings(s));
+  li.append(info);
+
+  if (s.activity === "playing") {
+    // The highlighted rating chip already shows the game type; only fall back to text without one.
+    if (!info.querySelector(".prating.current")) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = s.timeclass || "playing";
+      li.append(tag);
+    }
+
+    if (s.url) {
+      const watch = document.createElement("button");
+      watch.className = "watch";
+      watch.textContent = "Watch";
+      watch.title = s.privateGame
+        ? "Chess.com may block this if the game is private and you are not friends"
+        : "Watch live game";
+      watch.onclick = async () => {
+        const tab = await chrome.tabs.create({ url: watchUrl(s) });
+        if (tab?.id) {
+          await chrome.runtime.sendMessage({
+            type: "watchingTab",
+            tabId: tab.id,
+            username: s.username,
+            gameId: s.gameId,
+          });
+        }
+      };
+      li.append(watch);
+    }
+  }
+
+  if (removable) {
+    const remove = document.createElement("button");
+    remove.className = "remove";
+    remove.textContent = "×";
+    remove.title = "Stop watching";
+    remove.onclick = async () => {
+      const key = norm(s.username);
+      settings.watchedPlayers = settings.watchedPlayers.filter((n) => norm(n) !== key);
+      if (!settings.hiddenPlayers.some((n) => norm(n) === key)) settings.hiddenPlayers.push(s.username);
+      await saveSettings();
+    };
+    li.append(remove);
+  }
+  return li;
+}
+
+function emptyRow(text) {
+  const li = document.createElement("li");
+  li.className = "muted";
+  li.textContent = text;
+  return li;
+}
+
+function listedNames(apiFriends = [], scrapedFriends = []) {
+  const hidden = new Set((settings.hiddenPlayers || []).map(norm));
+  const me = norm(settings.username);
+  return [
+    ...new Set(
+      [...(apiFriends || []), ...(scrapedFriends || []), ...settings.watchedPlayers]
+        .map((n) => String(n || "").trim())
+        .filter((n) => n && norm(n) !== me && !hidden.has(norm(n)))
+    ),
+  ];
+}
+
+function renderPlayers(statuses, apiFriends = [], scrapedFriends = []) {
+  const byName = new Map(Object.values(statuses).map((s) => [norm(s.username), s]));
+  const sort = (a, b) => rank(a) - rank(b) || a.username.localeCompare(b.username);
+
+  const watched = listedNames(apiFriends, scrapedFriends)
+    .map((name) => byName.get(norm(name)) || { username: name, status: "offline", pending: true })
+    .sort(sort);
+  const watchList = $("watched");
+  watchList.replaceChildren();
+  const playing = watched.filter((s) => s.activity === "playing").length;
+  $("watchCount").textContent = watched.length
+    ? `(${watched.length}) · ${playing} playing`
+    : "";
+  if (!watched.length) watchList.append(emptyRow("Friends will appear here after a refresh. You can also add a player."));
+  for (const s of watched) watchList.append(playerRow(s, { removable: true }));
+}
+
+async function saveSettings() {
+  delete settings.manualFriends;
+  await chrome.storage.local.set({ settings });
+  await send("settingsChanged");
+  await renderData();
+}
+
+$("save").onclick = async () => {
+  settings.username = $("username").value.trim();
+  settings.intervalSec = Number($("interval").value);
+  settings.notifyOnline = $("notifyOnline").checked;
+  settings.notifyResults = $("notifyResults").checked;
+  settings.evalBar = $("evalBar").checked;
+  settings.bestMove = $("bestMove").checked;
+  settings.analyzeGame = $("analyzeGame").checked;
+  settings.followNextGame = $("followNextGame").checked;
+  settings.tiltLimit = Number($("tiltLimit").value);
+  for (const box of $("timeclasses").querySelectorAll("input")) {
+    settings.timeclasses[box.value] = box.checked;
+  }
+  const btn = $("save");
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+  await saveSettings();
+  btn.textContent = "Saved ✓";
+  btn.classList.add("saved");
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = "Save settings";
+    btn.classList.remove("saved");
+    showSettings(false);
+  }, 700);
+};
+
+function showSettings(open) {
+  $("settingsPanel").hidden = !open;
+  $("watchPanel").hidden = open;
+  $("settingsToggle").classList.toggle("active", open);
+  $("settingsToggle").setAttribute("aria-pressed", String(open));
+  $("settingsToggle").title = open ? "Close settings" : "Settings";
+}
+
+$("followNextGame").onchange = async () => {
+  settings.followNextGame = $("followNextGame").checked;
+  await chrome.storage.local.set({ settings });
+};
+$("analyzeGame").onchange = async () => {
+  settings.analyzeGame = $("analyzeGame").checked;
+  await chrome.storage.local.set({ settings });
+};
+$("evalBar").onchange = async () => {
+  settings.evalBar = $("evalBar").checked;
+  await chrome.storage.local.set({ settings });
+};
+$("bestMove").onchange = async () => {
+  settings.bestMove = $("bestMove").checked;
+  await chrome.storage.local.set({ settings });
+};
+
+$("settingsToggle").onclick = () => showSettings($("settingsPanel").hidden);
+
+$("addBtn").onclick = async () => {
+  const pick = suggestItems[suggestIndex] || suggestItems[0];
+  await addPlayer(pick?.username || $("addWatch").value.trim());
+};
+
+const suggestBox = $("addSuggest");
+let suggestItems = [];
+let suggestIndex = -1;
+let suggestTimer = 0;
+let suggestSeq = 0;
+
+function hideSuggest() {
+  suggestItems = [];
+  suggestIndex = -1;
+  suggestBox.hidden = true;
+  suggestBox.replaceChildren();
+}
+
+function renderSuggest() {
+  suggestBox.replaceChildren();
+  if (!suggestItems.length) {
+    suggestBox.hidden = true;
+    return;
+  }
+  suggestItems.forEach((u, i) => {
+    const li = document.createElement("li");
+    const already = settings.watchedPlayers.some((n) => norm(n) === norm(u.username));
+    li.className = `${i === suggestIndex ? "active" : ""}${already ? " already" : ""}`.trim();
+    if (u.avatar) {
+      const img = document.createElement("img");
+      img.src = u.avatar;
+      img.alt = "";
+      li.append(img);
+    } else {
+      const ph = document.createElement("span");
+      li.append(ph);
+    }
+    const info = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "s-name";
+    name.textContent = u.username;
+    info.append(name);
+    if (u.name && norm(u.name) !== norm(u.username)) {
+      const meta = document.createElement("div");
+      meta.className = "s-meta";
+      meta.textContent = already ? `${u.name} · already added` : u.name;
+      info.append(meta);
+    } else if (already) {
+      const meta = document.createElement("div");
+      meta.className = "s-meta";
+      meta.textContent = "Already added";
+      info.append(meta);
+    }
+    li.append(info);
+    if (u.title) {
+      const title = document.createElement("span");
+      title.className = "s-title";
+      title.textContent = u.title;
+      li.append(title);
+    }
+    li.onmousedown = (e) => e.preventDefault();
+    li.onclick = () => {
+      if (already) {
+        $("addError").textContent = `Already watching ${u.username}.`;
+        return;
+      }
+      addPlayer(u.username);
+    };
+    suggestBox.append(li);
+  });
+  suggestBox.hidden = false;
+}
+
+async function searchPlayers(query) {
+  const q = query.trim();
+  const seq = ++suggestSeq;
+  if (q.length < 1) {
+    hideSuggest();
+    return;
+  }
+  const listed = await chrome.storage.local.get(["apiFriends", "scrapedFriends"]);
+  if (listedNames(listed.apiFriends, listed.scrapedFriends).some((n) => norm(n) === norm(q))) {
+    hideSuggest();
+    $("addError").textContent = `Already watching ${q}.`;
+    return;
+  }
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: "searchUsers", query: q });
+  } catch {
+    res = { users: [] };
+  }
+  if (seq !== suggestSeq || $("addWatch").value.trim() !== q) return;
+  suggestItems = res?.users || [];
+  if (!suggestItems.length) {
+    try {
+      const pub = await fetch(`https://api.chess.com/pub/player/${encodeURIComponent(q)}`);
+      if (pub.ok) {
+        const info = await pub.json();
+        if (info.username && !settings.watchedPlayers.some((n) => norm(n) === norm(info.username))) {
+          suggestItems = [{ username: info.username, avatar: info.avatar || "", title: info.title || "", name: info.name || "" }];
+        }
+      }
+    } catch {
+      // public lookup failed
+    }
+  }
+  suggestIndex = suggestItems.length ? 0 : -1;
+  renderSuggest();
+  if (!suggestItems.length && q.length >= 2) {
+    $("addError").textContent = res?.already
+      ? `Already watching ${res.already}.`
+      : "No matching player found.";
+  }
+}
+
+$("addWatch").addEventListener("input", () => {
+  $("addError").textContent = "";
+  clearTimeout(suggestTimer);
+  suggestTimer = setTimeout(() => searchPlayers($("addWatch").value), 180);
+});
+$("addWatch").addEventListener("focus", () => {
+  if ($("addWatch").value.trim()) searchPlayers($("addWatch").value);
+});
+$("addWatch").addEventListener("blur", () => setTimeout(hideSuggest, 120));
+$("addWatch").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    hideSuggest();
+    return;
+  }
+  if (!suggestItems.length) {
+    if (e.key === "Enter") $("addBtn").click();
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    suggestIndex = (suggestIndex + 1) % suggestItems.length;
+    renderSuggest();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    suggestIndex = (suggestIndex - 1 + suggestItems.length) % suggestItems.length;
+    renderSuggest();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const pick = suggestItems[suggestIndex] || suggestItems[0];
+    addPlayer(pick.username);
+  }
+});
+
+async function addPlayer(name) {
+  name = String(name || "").trim();
+  $("addError").textContent = "";
+  if (!name) return;
+  const data = await chrome.storage.local.get(["apiFriends", "scrapedFriends"]);
+  if (listedNames(data.apiFriends, data.scrapedFriends).some((n) => norm(n) === norm(name))) {
+    $("addError").textContent = `Already watching ${name}.`;
+    return;
+  }
+  $("addBtn").textContent = "...";
+  const res = await chrome.runtime.sendMessage({ type: "lookupUser", username: name });
+  $("addBtn").textContent = "Add";
+  if (!res?.ok) {
+    $("addError").textContent = `Player "${name}" not found on chess.com.`;
+    return;
+  }
+  const added = res.username || name;
+  settings.hiddenPlayers = (settings.hiddenPlayers || []).filter((n) => norm(n) !== norm(added));
+  settings.watchedPlayers.push(added);
+  $("addWatch").value = "";
+  hideSuggest();
+  await saveSettings();
+}
+
+async function refresh({ manual = false } = {}) {
+  if (refreshing) return;
+  const btn = $("checkNow");
+  const label = btn.querySelector("span");
+  refreshing = true;
+  btn.disabled = true;
+  btn.classList.add("spinning");
+  if (manual) label.textContent = "Refreshing";
+  renderStatus();
+  try {
+    await send("checkNow");
+  } finally {
+    refreshing = false;
+    btn.disabled = false;
+    btn.classList.remove("spinning");
+    await renderData();
+    if (manual) {
+      btn.classList.add("done");
+      label.textContent = "Updated";
+      setTimeout(() => {
+        btn.classList.remove("done");
+        label.textContent = "Refresh";
+      }, 1500);
+    }
+  }
+}
+
+$("checkNow").onclick = () => refresh({ manual: true });
+
+// The background alarm does the automatic checks; this is only a fallback in case it is late.
+let autoTimer = null;
+function scheduleAutoRefresh() {
+  clearTimeout(autoTimer);
+  const due = nextCheck || Date.now() + intervalMs();
+  autoTimer = setTimeout(() => {
+    if (Date.now() >= nextCheck) refresh();
+  }, Math.max(0, due - Date.now()) + 5000);
+}
+
+function intervalMs() {
+  return Math.max(30, settings.intervalSec || 60) * 1000;
+}
+
+// Re-render whenever the background worker stores new results (alarm checks, other popups, etc.).
+let renderSoon = 0;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.settings) {
+    applySettings(changes.settings.newValue);
+    if ($("settingsPanel").hidden) fillSettingsForm();
+  }
+  if (changes.nextCheck) {
+    nextCheck = changes.nextCheck.newValue || 0;
+    scheduleAutoRefresh();
+    renderStatus();
+  }
+  if (changes.statuses || changes.lastCheck || changes.myStats || changes.settings) {
+    if (refreshing) return;
+    clearTimeout(renderSoon);
+    renderSoon = setTimeout(() => renderData(), 80);
+  }
+});
+
+function renderBell() {
+  const on = settings.notificationsEnabled !== false;
+  const btn = $("notifToggle");
+  btn.classList.toggle("off", !on);
+  btn.setAttribute("aria-pressed", String(on));
+  btn.title = on ? "Notifications on — click to mute" : "Notifications off — click to enable";
+}
+
+$("notifToggle").onclick = async () => {
+  const btn = $("notifToggle");
+  settings.notificationsEnabled = settings.notificationsEnabled === false;
+  renderBell();
+  if (settings.notificationsEnabled) {
+    btn.classList.remove("ring");
+    void btn.offsetWidth;
+    btn.classList.add("ring");
+  }
+  await chrome.runtime.sendMessage({ type: "setNotifications", enabled: settings.notificationsEnabled });
+};
+
+load().then(() => {
+  if (!settings.username) showSettings(true);
+  scheduleAutoRefresh();
+  if (Date.now() - lastCheck > intervalMs()) refresh();
+});

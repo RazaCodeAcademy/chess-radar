@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Retry Your Blunders — Chess Stocker Pro</title>
+  <link rel="stylesheet" href="puzzles.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="top">
+      <div>
+        <p class="eyebrow">Chess Stocker Pro</p>
+        <h1>Retry Your Blunders</h1>
+      </div>
+      <button id="exitBtn" class="btn ghost" type="button">Exit training</button>
+    </header>
+
+    <main id="trainView" class="layout">
+      <aside class="review" id="reviewPanel" aria-label="Game review"></aside>
+
+      <section class="board-pane">
+        <div id="boardHost" class="board-host" aria-label="Puzzle board"></div>
+      </section>
+
+      <aside class="side">
+        <div id="playPanel">
+          <div class="progress" id="progressDots"></div>
+          <p class="kicker" id="puzzleCount">Puzzle 1 of 5</p>
+          <div class="badge" id="classBadge">Blunder</div>
+          <p class="meta" id="moveMeta">Move 1</p>
+          <p class="prompt" id="prompt">Find the best move.</p>
+          <p class="note" id="note">Loading…</p>
+          <dl class="stats">
+            <div><dt>Attempts</dt><dd id="attempts">0</dd></div>
+            <div><dt>Hints</dt><dd id="hintsUsed">0</dd></div>
+          </dl>
+          <div class="actions">
+            <button id="hintBtn" class="btn secondary" type="button">Hint</button>
+            <button id="retryBtn" class="btn secondary" type="button">Retry</button>
+            <button id="solutionBtn" class="btn secondary" type="button">Show solution</button>
+          </div>
+        </div>
+        <section id="resultsView" class="results" hidden>
+          <h2>Your Blunder Recovery</h2>
+          <div class="result-grid" id="resultGrid"></div>
+          <div class="actions">
+            <button id="retryMissedBtn" class="btn primary" type="button">Retry missed puzzles</button>
+            <button id="returnBtn" class="btn secondary" type="button">Return to game</button>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <section id="errorView" class="error" hidden>
+      <h2>Puzzle session unavailable</h2>
+      <p id="errorText">This training session expired or could not be loaded.</p>
+      <button id="errorClose" class="btn primary" type="button">Close</button>
+    </section>
+  </div>
+  <script type="module" src="puzzles.js"></script>
+</body>
+</html>

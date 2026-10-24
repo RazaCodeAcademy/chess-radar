@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="header">
+    <h1>Chess Stocker Pro</h1>
+    <button id="settingsToggle" class="gear-btn" title="Settings" aria-pressed="false">
+      <svg class="icon-gear" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" d="M19.14 12.94a7.07 7.07 0 0 0 .05-.94 7.07 7.07 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.84a.5.5 0 0 0-.49.42l-.36 2.54a7.03 7.03 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.67 8.48a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.39-.96c.5.38 1.05.7 1.63.94l.36 2.54c.04.24.25.42.49.42h3.84c.24 0 .45-.18.49-.42l.36-2.54a7.03 7.03 0 0 0 1.63-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/>
+      </svg>
+      <svg class="icon-close" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" d="M18.3 5.71 12 12.01l-6.3-6.3-1.41 1.41 6.3 6.3-6.3 6.29 1.41 1.42 6.3-6.3 6.29 6.3 1.42-1.42-6.3-6.29 6.3-6.3z"/>
+      </svg>
+    </button>
+  </header>
+
+  <section id="statsSection" hidden>
+    <div id="ratings" class="ratings"></div>
+    <p id="session" class="session"></p>
+  </section>
+
+  <section id="settingsPanel" class="settings" hidden>
+    <div class="card">
+      <div class="card-title">Account</div>
+      <label class="field">
+        <span class="field-label">Chess.com username</span>
+        <input id="username" type="text" placeholder="e.g. hikaru" />
+        <span class="field-hint">Used for your ratings, session stats and the fair-play check.</span>
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Notifications</div>
+      <label class="switch-row">
+        <span>
+          <span class="switch-label">Game results</span>
+          <span class="field-hint">Result and rating change when a game ends</span>
+        </span>
+        <input id="notifyResults" type="checkbox" class="switch" />
+      </label>
+      <label class="switch-row">
+        <span>
+          <span class="switch-label">Comes online</span>
+          <span class="field-hint">Alert when a player logs in</span>
+        </span>
+        <input id="notifyOnline" type="checkbox" class="switch" />
+      </label>
+      <div class="field-label spaced">Game types</div>
+      <div class="chip-group" id="timeclasses">
+        <label class="chip-toggle"><input type="checkbox" value="bullet" /><span>Bullet</span></label>
+        <label class="chip-toggle"><input type="checkbox" value="blitz" /><span>Blitz</span></label>
+        <label class="chip-toggle"><input type="checkbox" value="rapid" /><span>Rapid</span></label>
+        <label class="chip-toggle"><input type="checkbox" value="daily" /><span>Daily</span></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Tools</div>
+      <label class="switch-row">
+        <span>
+          <span class="switch-label">Evaluation bar</span>
+          <span class="field-hint">Stockfish bar when watching others' games</span>
+        </span>
+        <input id="evalBar" type="checkbox" class="switch" />
+      </label>
+      <label class="switch-row">
+        <span>
+          <span class="switch-label">Best move</span>
+          <span class="field-hint">Engine's best move as an arrow on the board</span>
+        </span>
+        <input id="bestMove" type="checkbox" class="switch" />
+      </label>
+      <label class="switch-row">
+        <span>
+          <span class="switch-label">Analyze game</span>
+          <span class="field-hint">Review finished and old games, including your own. Live games stay off.</span>
+        </span>
+        <input id="analyzeGame" type="checkbox" class="switch" />
+      </label>
+      <label class="switch-row">
+        <span>
+          <span class="switch-label">Follow next game</span>
+          <span class="field-hint">When a watched game ends, open their next game in the same tab</span>
+        </span>
+        <input id="followNextGame" type="checkbox" class="switch" />
+      </label>
+      <div class="grid-2">
+        <label class="field">
+          <span class="field-label">Check every</span>
+          <select id="interval">
+            <option value="30">30 sec</option>
+            <option value="60">1 min</option>
+            <option value="120">2 min</option>
+            <option value="300">5 min</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Tilt warning</span>
+          <select id="tiltLimit">
+            <option value="0">Off</option>
+            <option value="2">After 2 losses</option>
+            <option value="3">After 3 losses</option>
+            <option value="4">After 4 losses</option>
+            <option value="5">After 5 losses</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <button id="save" class="save-btn">Save settings</button>
+  </section>
+
+  <section id="watchPanel">
+    <strong>Players <span id="watchCount"></span></strong>
+    <p class="muted">Your Chess.com friends are added automatically. Search to watch anyone else.</p>
+    <div class="add-wrap">
+      <div class="row">
+        <input id="addWatch" type="text" placeholder="Search username, e.g. hikaru" autocomplete="off" spellcheck="false" />
+        <button id="addBtn">Add</button>
+      </div>
+      <ul id="addSuggest" class="suggest" hidden></ul>
+    </div>
+    <p id="addError" class="error"></p>
+    <ul id="watched"></ul>
+  </section>
+
+  <footer class="footer">
+    <div class="status">
+      <span id="statusDot" class="status-dot"></span>
+      <div>
+        <div id="meta" class="status-main">Not checked yet</div>
+        <div id="metaSub" class="status-sub"></div>
+      </div>
+    </div>
+    <div class="footer-actions">
+      <button id="notifToggle" class="icon-btn bell" aria-pressed="true">
+        <svg class="icon-bell-on" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/>
+        </svg>
+        <svg class="icon-bell-off" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6.17V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66c-.6.13-1.17.34-1.7.62L19 15.83ZM3.27 2 2 3.27l3.3 3.3A6.96 6.96 0 0 0 5 11v5l-2 2v1h14.73l3 3L22 20.73 3.27 2Z"/>
+        </svg>
+      </button>
+      <button id="checkNow" class="icon-btn primary" title="Refresh now">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path fill="currentColor" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6a5.9 5.9 0 0 1 4.22 1.78L13 11h7V4l-2.35 2.35Z"/>
+        </svg>
+        <span>Refresh</span>
+      </button>
+    </div>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

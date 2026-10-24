@@ -1,0 +1,95 @@
+#cfn-evalbar {
+  display: none;
+  position: fixed;
+  width: 20px;
+  z-index: 9999;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #403d39;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+}
+#cfn-evalbar .cfn-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #f2f2f2;
+  transition: height 0.4s ease;
+}
+#cfn-evalbar.cfn-flipped .cfn-fill {
+  bottom: auto;
+  top: 0;
+}
+#cfn-evalbar .cfn-score {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  font: 700 9px/1 system-ui, sans-serif;
+  text-align: center;
+  color: #f2f2f2;
+}
+#cfn-evalbar .cfn-score.cfn-white-ahead {
+  top: auto;
+  bottom: 4px;
+  color: #403d39;
+}
+#cfn-evalbar.cfn-flipped .cfn-score {
+  top: auto;
+  bottom: 4px;
+}
+#cfn-evalbar.cfn-flipped .cfn-score.cfn-white-ahead {
+  top: 4px;
+  bottom: auto;
+}
+#cfn-bestmove {
+  display: none;
+  position: fixed;
+  z-index: 9998;
+  pointer-events: none;
+  overflow: visible;
+}
+#cfn-bestmove .cfn-arrow {
+  stroke: #81b64c;
+  stroke-width: 0.18;
+  stroke-linecap: round;
+}
+#cfn-bestmove .cfn-arrow-played {
+  stroke-width: 0.2;
+}
+#cfn-bestmove .cfn-head {
+  fill: #81b64c;
+}
+#cfn-bestmove-badge {
+  display: none;
+  position: fixed;
+  z-index: 9999;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(38, 36, 33, 0.88);
+  border: 1px solid rgba(255, 170, 0, 0.7);
+  color: #ffc24d;
+  font: 700 12px/1.2 system-ui, sans-serif;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+#cfn-move-icon {
+  display: none;
+  position: fixed;
+  z-index: 10001;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 0;
+  color: #fff;
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+#cfn-evalbar.cfn-notice {
+  opacity: 0.6;
+}

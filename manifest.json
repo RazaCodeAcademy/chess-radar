@@ -1,0 +1,63 @@
+{
+  "manifest_version": 3,
+  "name": "Chess Stocker Pro",
+  "version": "1.2.0",
+  "description": "Desktop notification when someone in your Chess.com friend list starts playing, plus an evaluation bar for games you watch.",
+  "permissions": [
+    "alarms",
+    "notifications",
+    "storage",
+    "offscreen",
+    "scripting",
+    "tabs",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": ["https://www.chess.com/*", "https://api.chess.com/*"],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "chesscom_origin", "enabled": true, "path": "rules.json" }]
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "action": {
+    "default_title": "Chess Stocker Pro",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.chess.com/friends*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.chess.com/*"],
+      "js": ["search-main.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.chess.com/*"],
+      "js": ["search-bridge.js", "watch-recover.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.chess.com/*"],
+      "js": ["evalbar.js", "review.js"],
+      "css": ["evalbar.css", "review.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
