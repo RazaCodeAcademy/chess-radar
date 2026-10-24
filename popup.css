@@ -119,6 +119,31 @@ li {
   padding: 5px 0;
   border-bottom: 1px solid #3c3a37;
 }
+li.empty-state {
+  display: block;
+  grid-template-columns: none;
+  padding: 18px 14px;
+  margin: 8px 0 4px;
+  text-align: center;
+  border: 1px dashed #4b4847;
+  border-radius: 10px;
+  background: #262421;
+  color: #c3c2bf;
+}
+li.empty-state .empty-title {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: #ddd;
+  white-space: normal;
+}
+li.empty-state .empty-detail {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #8a8785;
+  white-space: normal;
+}
 li img { width: 24px; height: 24px; border-radius: 3px; }
 li a { color: #eee; text-decoration: none; }
 .player-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; }

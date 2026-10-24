@@ -38,11 +38,19 @@ function fillSettingsForm() {
 }
 
 async function renderData() {
-  const data = await chrome.storage.local.get(["statuses", "lastCheck", "myStats", "nextCheck", "apiFriends", "scrapedFriends"]);
+  const data = await chrome.storage.local.get([
+    "statuses",
+    "lastCheck",
+    "myStats",
+    "nextCheck",
+    "apiFriends",
+    "scrapedFriends",
+    "friendsStatus",
+  ]);
   nextCheck = data.nextCheck || 0;
   renderBell();
   renderStats(data.myStats);
-  renderPlayers(data.statuses || {}, data.apiFriends || [], data.scrapedFriends || []);
+  renderPlayers(data.statuses || {}, data.apiFriends || [], data.scrapedFriends || [], data.friendsStatus || null);
   lastCheck = data.lastCheck || 0;
   renderStatus();
 }
@@ -273,10 +281,19 @@ function playerRow(s, { removable = false } = {}) {
   return li;
 }
 
-function emptyRow(text) {
+function emptyRow(title, detail = "") {
   const li = document.createElement("li");
-  li.className = "muted";
-  li.textContent = text;
+  li.className = "empty-state";
+  const heading = document.createElement("div");
+  heading.className = "empty-title";
+  heading.textContent = title;
+  li.append(heading);
+  if (detail) {
+    const note = document.createElement("div");
+    note.className = "empty-detail";
+    note.textContent = detail;
+    li.append(note);
+  }
   return li;
 }
 
@@ -292,7 +309,26 @@ function listedNames(apiFriends = [], scrapedFriends = []) {
   ];
 }
 
-function renderPlayers(statuses, apiFriends = [], scrapedFriends = []) {
+function emptyFriendsMessage(friendsStatus) {
+  if (!settings.username) {
+    return {
+      title: "No players yet",
+      detail: "Open Settings, enter your Chess.com username, save, then press Refresh. You can also search and add anyone above.",
+    };
+  }
+  if (friendsStatus?.hint) {
+    return {
+      title: "Friends will appear here after a refresh",
+      detail: friendsStatus.hint,
+    };
+  }
+  return {
+    title: "Friends will appear here after a refresh",
+    detail: "Stay logged into Chess.com in this browser, press Refresh, or search above to add a player.",
+  };
+}
+
+function renderPlayers(statuses, apiFriends = [], scrapedFriends = [], friendsStatus = null) {
   const byName = new Map(Object.values(statuses).map((s) => [norm(s.username), s]));
   const sort = (a, b) => rank(a) - rank(b) || a.username.localeCompare(b.username);
 
@@ -305,7 +341,10 @@ function renderPlayers(statuses, apiFriends = [], scrapedFriends = []) {
   $("watchCount").textContent = watched.length
     ? `(${watched.length}) · ${playing} playing`
     : "";
-  if (!watched.length) watchList.append(emptyRow("Friends will appear here after a refresh. You can also add a player."));
+  if (!watched.length) {
+    const msg = emptyFriendsMessage(friendsStatus);
+    watchList.append(emptyRow(msg.title, msg.detail));
+  }
   for (const s of watched) watchList.append(playerRow(s, { removable: true }));
 }
 
@@ -599,7 +638,15 @@ chrome.storage.onChanged.addListener((changes, area) => {
     scheduleAutoRefresh();
     renderStatus();
   }
-  if (changes.statuses || changes.lastCheck || changes.myStats || changes.settings) {
+  if (
+    changes.statuses ||
+    changes.lastCheck ||
+    changes.myStats ||
+    changes.settings ||
+    changes.apiFriends ||
+    changes.scrapedFriends ||
+    changes.friendsStatus
+  ) {
     if (refreshing) return;
     clearTimeout(renderSoon);
     renderSoon = setTimeout(() => renderData(), 80);

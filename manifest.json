@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Chess Stocker Pro",
-  "version": "1.2.0",
+  "name": "Chess Stalker Pro",
+  "version": "1.2.1",
   "description": "Desktop notification when someone in your Chess.com friend list starts playing, plus an evaluation bar for games you watch.",
   "permissions": [
     "alarms",
@@ -23,7 +23,7 @@
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "action": {
-    "default_title": "Chess Stocker Pro",
+    "default_title": "Chess Stalker Pro",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

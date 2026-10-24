@@ -169,23 +169,36 @@ function scrapeMemberNames(html, me) {
   return [...names];
 }
 
-async function friendsFromOpenTab(me) {
-  const tabs = await chrome.tabs.query({ url: "https://www.chess.com/*" });
-  const tab = tabs.find((t) => t.id != null && !t.discarded);
-  if (!tab?.id) return [];
+async function friendsFromTab(tabId, me) {
+  if (tabId == null) return [];
   try {
-    const res = await withTimeout(chrome.tabs.sendMessage(tab.id, { type: "cfnPageFriends", me }), 4500);
+    const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: "cfnPageFriends", me }), 6000);
     return res?.users || [];
   } catch {
     try {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["search-main.js"], world: "MAIN" });
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["search-bridge.js"] });
-      const res = await withTimeout(chrome.tabs.sendMessage(tab.id, { type: "cfnPageFriends", me }), 4500);
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["search-main.js"], world: "MAIN" });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["search-bridge.js"] });
+      const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: "cfnPageFriends", me }), 6000);
       return res?.users || [];
     } catch {
       return [];
     }
   }
+}
+
+async function friendsFromOpenTab(me) {
+  const tabs = await chrome.tabs.query({ url: "https://www.chess.com/*" });
+  const preferred =
+    tabs.find((t) => t.id != null && !t.discarded && /\/friends/i.test(t.url || "")) ||
+    tabs.find((t) => t.id != null && !t.discarded);
+  if (!preferred?.id) return [];
+  return friendsFromTab(preferred.id, me);
+}
+
+async function setFriendsStatus({ count, ok, hint }) {
+  await chrome.storage.local.set({
+    friendsStatus: { count, ok, hint: hint || "", at: Date.now() },
+  });
 }
 
 async function collectChesscomFriends(username) {
@@ -234,6 +247,25 @@ async function collectChesscomFriends(username) {
     }
   }
 
+  // Chess.com friends APIs often need a real page session; open a background tab if needed.
+  if (!found.size) {
+    try {
+      const tabId = await ensureSearchTab();
+      for (const u of await friendsFromTab(tabId, username)) add(u.username || u);
+    } catch {
+      // no usable chess.com tab
+    }
+  }
+
+  if (!found.size) {
+    try {
+      const res = await fetch(`${BASE}/friends`, { credentials: "include" });
+      if (res.ok) scrapeMemberNames(await res.text(), me).forEach(add);
+    } catch {
+      // not logged in or blocked
+    }
+  }
+
   return [...found];
 }
 
@@ -244,8 +276,13 @@ async function refreshApiFriends(settings, force = false) {
   const names = await collectChesscomFriends(settings.username);
   if (names.length) {
     await chrome.storage.local.set({ apiFriends: names, apiFriendsAt: Date.now() });
+    await setFriendsStatus({ count: names.length, ok: true, hint: "" });
     return names;
   }
+  const hint = !settings.username
+    ? "Set your Chess.com username in Settings, save, then press Refresh."
+    : "Stay logged into Chess.com in this browser, open chess.com/friends once, then press Refresh. You can also add players with search.";
+  await setFriendsStatus({ count: apiFriends.length, ok: false, hint });
   return apiFriends;
 }
 
@@ -1495,7 +1532,7 @@ const handlers = {
     await chrome.storage.local.set({ settings: { ...settings, notificationsEnabled: msg.enabled } });
     if (msg.enabled) {
       await notify(
-        { username: "chess-stocker" },
+        { username: "chess-stalker" },
         "Notifications are enabled",
         "You'll be alerted when watched players start or finish a game.",
         BASE,
