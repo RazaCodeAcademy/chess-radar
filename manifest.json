@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Chess Stalker Pro",
+  "name": "ChessRadar",
   "version": "1.2.1",
   "description": "Desktop notification when someone in your Chess.com friend list starts playing, plus an evaluation bar for games you watch.",
   "permissions": [
@@ -12,7 +12,14 @@
     "tabs",
     "declarativeNetRequestWithHostAccess"
   ],
-  "host_permissions": ["https://www.chess.com/*", "https://api.chess.com/*"],
+  "host_permissions": [
+    "https://www.chess.com/*",
+    "https://api.chess.com/*",
+    "https://lichess.org/*",
+    "https://explorer.lichess.org/*",
+    "https://www.chessdb.cn/*",
+    "https://raw.githubusercontent.com/*"
+  ],
   "declarative_net_request": {
     "rule_resources": [{ "id": "chesscom_origin", "enabled": true, "path": "rules.json" }]
   },
@@ -23,7 +30,7 @@
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "action": {
-    "default_title": "Chess Stalker Pro",
+    "default_title": "ChessRadar",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -36,6 +43,12 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["pieces/*.svg"],
+      "matches": ["https://www.chess.com/*"]
+    }
+  ],
   "content_scripts": [
     {
       "matches": ["https://www.chess.com/friends*"],
@@ -55,8 +68,14 @@
     },
     {
       "matches": ["https://www.chess.com/*"],
-      "js": ["evalbar.js", "review.js"],
-      "css": ["evalbar.css", "review.css"],
+      "js": ["evalbar.js"],
+      "css": ["evalbar.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.chess.com/*"],
+      "js": ["review.js"],
+      "css": ["review.css"],
       "run_at": "document_idle"
     }
   ]

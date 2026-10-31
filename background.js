@@ -26,6 +26,9 @@ const DEFAULT_SETTINGS = {
   hiddenPlayers: [],
   followNextGame: true,
   analyzeGame: true,
+  hideOpponent: false,
+  blunderAlerts: false,
+  engineId: "stockfish-lite",
 };
 
 // ---------- storage helpers ----------
@@ -195,9 +198,9 @@ async function friendsFromOpenTab(me) {
   return friendsFromTab(preferred.id, me);
 }
 
-async function setFriendsStatus({ count, ok, hint }) {
+async function setFriendsStatus({ count, ok, hint, needsTab = false }) {
   await chrome.storage.local.set({
-    friendsStatus: { count, ok, hint: hint || "", at: Date.now() },
+    friendsStatus: { count, ok, hint: hint || "", needsTab: !!needsTab, at: Date.now() },
   });
 }
 
@@ -247,13 +250,19 @@ async function collectChesscomFriends(username) {
     }
   }
 
-  // Chess.com friends APIs often need a real page session; open a background tab if needed.
+  // A Chess.com tab can supply the friend list. Never open one from Refresh.
+  let needsTab = false;
   if (!found.size) {
-    try {
-      const tabId = await ensureSearchTab();
-      for (const u of await friendsFromTab(tabId, username)) add(u.username || u);
-    } catch {
-      // no usable chess.com tab
+    const tabs = await chrome.tabs.query({ url: "https://www.chess.com/*" });
+    const live = tabs.find((t) => t.id != null && !t.discarded);
+    if (!live) {
+      needsTab = true;
+    } else {
+      try {
+        for (const u of await friendsFromTab(live.id, username)) add(u.username || u);
+      } catch {
+        // the open tab could not be read
+      }
     }
   }
 
@@ -266,23 +275,26 @@ async function collectChesscomFriends(username) {
     }
   }
 
-  return [...found];
+  return { names: [...found], needsTab: needsTab && !found.size };
 }
 
 const FRIENDS_TTL_MS = 10 * 60 * 1000;
 async function refreshApiFriends(settings, force = false) {
   const { apiFriends = [], apiFriendsAt = 0 } = await chrome.storage.local.get(["apiFriends", "apiFriendsAt"]);
   if (!force && Date.now() - apiFriendsAt < FRIENDS_TTL_MS && apiFriends.length) return apiFriends;
-  const names = await collectChesscomFriends(settings.username);
+  const collected = await collectChesscomFriends(settings.username);
+  const names = collected.names || [];
   if (names.length) {
     await chrome.storage.local.set({ apiFriends: names, apiFriendsAt: Date.now() });
-    await setFriendsStatus({ count: names.length, ok: true, hint: "" });
+    await setFriendsStatus({ count: names.length, ok: true, hint: "", needsTab: false });
     return names;
   }
-  const hint = !settings.username
+  const hint = collected.needsTab
+    ? "Open Chess.com in a tab to refresh the friend list."
+    : !settings.username
     ? "Set your Chess.com username in Settings, save, then press Refresh."
-    : "Stay logged into Chess.com in this browser, open chess.com/friends once, then press Refresh. You can also add players with search.";
-  await setFriendsStatus({ count: apiFriends.length, ok: false, hint });
+    : "Stay logged into Chess.com in this browser, then press Refresh. You can also add players with search.";
+  await setFriendsStatus({ count: apiFriends.length, ok: false, hint, needsTab: !!collected.needsTab });
   return apiFriends;
 }
 
@@ -532,7 +544,7 @@ async function fetchLiveGame(id) {
   return (await res.json()).game;
 }
 
-function describeResult(username, game) {
+function describeResult(username, game, hideOpponent) {
   if (/abort/i.test(game.resultMessage || "") || game.gameEndReason === "aborted") return null;
   const headers = game.pgnHeaders || {};
   const isWhite = norm(headers.White) === norm(username);
@@ -541,13 +553,17 @@ function describeResult(username, game) {
   const winner = game.colorOfWinner;
   const outcome = !winner ? "drew" : (winner === "white") === isWhite ? "won" : "lost";
   const delta = game.isRated && typeof change === "number" ? ` (${change > 0 ? "+" : ""}${change})` : "";
+  const shown = hideOpponent ? "Opponent" : opponent || "Opponent";
+  let message = game.resultMessage || "Game finished.";
+  if (hideOpponent && opponent) message = message.split(opponent).join("Opponent");
   return {
-    title: `${username} ${outcome} vs ${opponent || "opponent"}${delta}`,
-    message: game.resultMessage || "Game finished.",
+    title: `${username} ${outcome} vs ${shown}${delta}`,
+    message,
   };
 }
 
 async function processPendingResults(newPending, notifyOpts) {
+  const prefs = await getSettings();
   const { pendingResults = [] } = await chrome.storage.local.get("pendingResults");
   const queue = [...pendingResults, ...newPending];
   if (!queue.length) return;
@@ -558,7 +574,7 @@ async function processPendingResults(newPending, notifyOpts) {
         try {
           const game = await fetchLiveGame(p.gameId);
           if (!game?.isFinished) return p;
-          const result = describeResult(p.username, game);
+          const result = describeResult(p.username, game, prefs.hideOpponent);
           if (result) await notify(p, result.title, result.message, `${BASE}/game/live/${p.gameId}`, notifyOpts);
           return null;
         } catch {
@@ -866,7 +882,7 @@ async function runCheck({ forceStats = false } = {}) {
     }
 
     await chrome.storage.local.set({ statuses, lastCheck: Date.now() });
-    chrome.action.setBadgeBackgroundColor({ color: "#81b64c" });
+    chrome.action.setBadgeBackgroundColor({ color: "#c084fc" });
     chrome.action.setBadgeText({ text: playingCount ? String(playingCount) : "" });
 
     const followJobs =
@@ -900,6 +916,39 @@ async function scheduleAlarms() {
   await chrome.alarms.create(POLL_ALARM, { periodInMinutes: minutes, delayInMinutes: 0.1 });
 }
 
+// Strongest first. Lichess Cloud is Stockfish at high depth. The local builds are
+// the same Stockfish 19 lite binary with a longer or shorter search. Full Leela
+// and the large Stockfish networks are too big to ship inside the extension.
+const ENGINES = {
+  "lichess-cloud": { id: "lichess-cloud", name: "Lichess Cloud", kind: "cloud" },
+  "stockfish-deep": { id: "stockfish-deep", name: "Stockfish 19 deep", kind: "local", search: "go depth 20 movetime 2800" },
+  "stockfish-lite": { id: "stockfish-lite", name: "Stockfish 19 lite", kind: "local", search: "go depth 16 movetime 1200" },
+};
+
+function selectedEngine(settings) {
+  return ENGINES[settings?.engineId] || ENGINES["stockfish-lite"];
+}
+
+async function lichessCloudEval(fen) {
+  const res = await fetch(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}&multiPv=1`, {
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const pv = data?.pvs?.[0];
+  if (!pv) return null;
+  const bestmove = String(pv.moves || "").split(" ")[0] || null;
+  return {
+    ok: true,
+    fen,
+    depth: data.depth || 0,
+    cp: pv.cp ?? null,
+    mate: pv.mate ?? null,
+    bestmove,
+    pv: bestmove,
+  };
+}
+
 // ---------- engine (offscreen document running Stockfish) ----------
 
 let creatingOffscreen = null;
@@ -922,8 +971,31 @@ async function ensureOffscreen() {
 }
 
 async function evaluate(fen, tabId) {
+  const settings = await getSettings();
+  const engine = selectedEngine(settings);
+  if (engine.kind === "cloud") {
+    try {
+      const cloud = await lichessCloudEval(fen);
+      if (cloud) return { ...cloud, engineId: engine.id, engineName: engine.name };
+    } catch {
+      // Fall through to the local engine when Lichess has no cached position.
+    }
+  }
+  const local = engine.kind === "local" ? engine : ENGINES["stockfish-deep"];
   await ensureOffscreen();
-  return chrome.runtime.sendMessage({ target: "offscreen", type: "evaluate", fen, tabId });
+  const res = await chrome.runtime.sendMessage({
+    target: "offscreen",
+    type: "evaluate",
+    fen,
+    tabId,
+    search: local.search,
+  });
+  return {
+    ...res,
+    engineId: local.id,
+    engineName: local.name,
+    fallback: engine.kind === "cloud",
+  };
 }
 
 async function fetchGameForReview(gameId, kind) {
@@ -1532,7 +1604,7 @@ const handlers = {
     await chrome.storage.local.set({ settings: { ...settings, notificationsEnabled: msg.enabled } });
     if (msg.enabled) {
       await notify(
-        { username: "chess-stalker" },
+        { username: "chessradar" },
         "Notifications are enabled",
         "You'll be alerted when watched players start or finish a game.",
         BASE,
@@ -1660,6 +1732,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.target === "offscreen") return false;
   const handler = handlers[msg.type];
   if (!handler) return false;
-  handler(msg, sender).then(sendResponse);
+  handler(msg, sender).then(sendResponse, (err) => {
+    sendResponse({ ok: false, error: err?.message || "The request failed." });
+  });
   return true;
 });

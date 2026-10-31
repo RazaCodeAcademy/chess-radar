@@ -22,6 +22,9 @@
   let cycleKey = "";
   let cycleIndex = -1;
   let puzzle = null;
+  let insightTab = "takeaway";
+  let linePly = 0;
+  let stage = null;
   const finishedById = new Map();
   let finishedFetchAt = 0;
 
@@ -78,6 +81,7 @@
   });
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const norm = (name) => String(name || "").trim().toLowerCase();
 
   function currentGame() {
     const path = location.pathname;
@@ -171,6 +175,9 @@
       gameKey = game.key;
       state = { status: "idle" };
       cursor = 0;
+      insightTab = "takeaway";
+      linePly = 0;
+      stopStage();
       stopPlay();
       render();
     }
@@ -311,6 +318,7 @@
   });
 
   function render() {
+    clearStageTimer();
     if (state.status === "idle") {
       body.innerHTML = `
         <p class="cfn-rv-intro">Stockfish checks every move and grades both players: accuracy, best moves, mistakes and blunders.</p>
@@ -328,7 +336,20 @@
     } else if (puzzle) {
       body.innerHTML = renderPuzzle();
     } else {
-      body.innerHTML = renderResult(state.result);
+      try {
+        body.innerHTML = renderResult(state.result);
+      } catch (err) {
+        body.innerHTML = `
+          <p class="cfn-rv-error">${esc(err?.message || "Could not show this review.")}</p>
+          <button class="cfn-rv-primary" data-action="analyze" type="button">Try again</button>`;
+      }
+    }
+    if (state.status === "done" && !puzzle && stage) {
+      try {
+        paintStage(false);
+      } catch {
+        // The written review stays on screen if the mini-board cannot be drawn.
+      }
     }
     publish();
   }
@@ -385,6 +406,514 @@
     showMove(moves[cycleIndex]);
   }
 
+  function focusColor(result) {
+    const watched = norm(new URLSearchParams(location.search).get("cfn") || "");
+    const me = norm(settings.username);
+    const want = watched || me;
+    if (!want || !result) return "";
+    if (norm(result.white?.name) === want) return "w";
+    if (norm(result.black?.name) === want) return "b";
+    return "";
+  }
+
+  function shownPlayer(player, side, result) {
+    const focus = focusColor(result);
+    const code = side === "white" ? "w" : "b";
+    if (!settings.hideOpponent || !focus || code === focus) return player;
+    return { ...player, name: "Opponent", rating: null };
+  }
+
+  function clearStageTimer() {
+    if (!stage?.timer) return;
+    clearTimeout(stage.timer);
+    stage.timer = null;
+    stage.playing = false;
+  }
+
+  function stopStage() {
+    clearStageTimer();
+    stage = null;
+  }
+
+  function shownEval(whiteCp, color) {
+    if (whiteCp == null || Number.isNaN(Number(whiteCp))) return "—";
+    const value = color === "w" ? Number(whiteCp) : -Number(whiteCp);
+    if (Math.abs(value) >= 9000) return value > 0 ? "mate" : "mated";
+    const pawns = value / 100;
+    return `${pawns > 0 ? "+" : ""}${pawns.toFixed(1)}`;
+  }
+
+  function markedSan(move) {
+    const mark = move.cls === "blunder" || move.cls === "mistake" ? "?" : move.cls === "inaccuracy" ? "?!" : "";
+    return `${move.san}${mark}`;
+  }
+
+  function kindLabel(cls) {
+    if (cls === "blunder") return "Blunder";
+    if (cls === "inaccuracy") return "Inaccuracy";
+    if (cls === "mistake") return "Mistake";
+    return "Mistake";
+  }
+
+  function moveLabel(move) {
+    return `${move.moveNumber}${move.color === "w" ? "." : "…"} ${markedSan(move)}`;
+  }
+
+  function armStage(move) {
+    const speed = stage?.speed || 1;
+    clearStageTimer();
+    const steps = Array.isArray(move?.line) ? move.line.filter((step) => step?.fen && step?.uci) : [];
+    if (!move?.fen) {
+      stage = null;
+      return;
+    }
+    stage = {
+      fens: [move.fen, ...steps.map((step) => step.fen)],
+      steps,
+      index: 0,
+      playing: false,
+      timer: null,
+      busy: false,
+      speed,
+    };
+  }
+
+  const PIECE_NAME = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+  const pieceCache = new Map();
+  // Chess.com's page policy blocks chrome-extension image URLs, which leaves a
+  // broken icon in every square. Fetch the files from the extension and use a data URL.
+  const piecesReady = Promise.all(
+    ["w", "b"].flatMap((color) =>
+      Object.values(PIECE_NAME).map(async (name) => {
+        try {
+          const res = await fetch(chrome.runtime.getURL(`pieces/${name}-${color}.svg`));
+          if (!res.ok) return;
+          const text = (await res.text()).replace(/<\?xml[^>]*\?>/gi, "").replace(/<!DOCTYPE[^>]*>/gi, "");
+          pieceCache.set(`${name}-${color}`, `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`);
+        } catch {
+          // That piece stays blank if the file cannot be read.
+        }
+      })
+    )
+  );
+
+  function pieceSrc(color, type) {
+    const name = PIECE_NAME[type];
+    return name ? pieceCache.get(`${name}-${color}`) || "" : "";
+  }
+
+  function fenPieces(fen) {
+    const map = new Map();
+    String(fen || "")
+      .split(" ")[0]
+      .split("/")
+      .forEach((row, rankIndex) => {
+        let file = 0;
+        for (const ch of row) {
+          if (/\d/.test(ch)) file += Number(ch);
+          else {
+            map.set("abcdefgh"[file] + (8 - rankIndex), {
+              color: ch === ch.toUpperCase() ? "w" : "b",
+              type: ch.toLowerCase(),
+            });
+            file += 1;
+          }
+        }
+      });
+    return map;
+  }
+
+  function kingInCheck(fen) {
+    const turn = String(fen || "").split(" ")[1];
+    const want = turn === "b" ? "k" : "K";
+    const rows = String(fen || "").split(" ")[0].split("/");
+    for (let rankIndex = 0; rankIndex < rows.length; rankIndex += 1) {
+      let file = 0;
+      for (const ch of rows[rankIndex]) {
+        if (/\d/.test(ch)) file += Number(ch);
+        else {
+          if (ch === want) return "abcdefgh"[file] + (8 - rankIndex);
+          file += 1;
+        }
+      }
+    }
+    return "";
+  }
+
+  function drawBoard(el, fen, marks) {
+    el.replaceChildren();
+    const flipped = focusColor(state.result) === "b";
+    const ranks = flipped ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
+    const files = flipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
+    const pieces = fenPieces(fen);
+    for (const rank of ranks) {
+      for (const file of files) {
+        const sq = "abcdefgh"[file] + rank;
+        const cell = document.createElement("div");
+        cell.className = "cfn-sq" + ((file + rank) % 2 === 1 ? " dark" : "");
+        cell.dataset.sq = sq;
+        if (marks?.last?.includes(sq)) cell.classList.add("last");
+        if (marks?.check === sq) cell.classList.add("check");
+        const piece = pieces.get(sq);
+        if (piece) {
+          const img = document.createElement("img");
+          img.src = pieceSrc(piece.color, piece.type);
+          img.alt = "";
+          img.draggable = false;
+          cell.append(img);
+        }
+        el.append(cell);
+      }
+    }
+  }
+
+  async function paintStage() {
+    await piecesReady;
+    const el = body.querySelector(".cfn-mini");
+    if (!el || !stage) return;
+    const fen = stage.fens[stage.index] || stage.fens[0];
+    const step = stage.index > 0 ? stage.steps[stage.index - 1] : null;
+    drawBoard(el, fen, {
+      last: step ? [step.uci.slice(0, 2), step.uci.slice(2, 4)] : [],
+      check: step?.check ? kingInCheck(fen) : "",
+    });
+    body.querySelectorAll(".cfn-line li").forEach((li, i) => {
+      li.classList.toggle("is-on", i === stage.index - 1);
+    });
+    const play = body.querySelector("[data-insight='play']");
+    if (play) {
+      play.classList.toggle("is-on", !!stage.playing);
+      play.textContent = stage.playing ? "Pause" : "Play";
+    }
+  }
+
+  function castleRook(uci) {
+    const from = uci.slice(0, 2);
+    const to = uci.slice(2, 4);
+    if ((from !== "e1" && from !== "e8") || from[1] !== to[1]) return null;
+    const delta = to.charCodeAt(0) - from.charCodeAt(0);
+    if (Math.abs(delta) !== 2) return null;
+    return delta > 0 ? [`h${from[1]}`, `f${from[1]}`] : [`a${from[1]}`, `d${from[1]}`];
+  }
+
+  async function animateStage() {
+    await piecesReady;
+    const el = body.querySelector(".cfn-mini");
+    const step = stage?.steps[stage.index - 1];
+    const fromFen = stage?.fens[stage.index - 1];
+    if (!el || !step || !fromFen) return Promise.resolve();
+    const from = step.uci.slice(0, 2);
+    const to = step.uci.slice(2, 4);
+    drawBoard(el, fromFen, { last: [from, to] });
+    const img = el.querySelector(`[data-sq="${from}"] img`);
+    const dest = el.querySelector(`[data-sq="${to}"]`);
+    const origin = el.querySelector(`[data-sq="${from}"]`);
+    const ms = Math.round(380 / (stage.speed || 1));
+    if (!img || !dest || !origin) return Promise.resolve();
+    const a = origin.getBoundingClientRect();
+    const b = dest.getBoundingClientRect();
+    const before = fenPieces(fromFen);
+    const after = fenPieces(stage.fens[stage.index]);
+    for (const [sq, piece] of before) {
+      if (sq === from) continue;
+      const next = after.get(sq);
+      if (!next || next.type !== piece.type || next.color !== piece.color) {
+        const gone = el.querySelector(`[data-sq="${sq}"] img`);
+        if (gone && gone !== img) {
+          gone.style.transition = `opacity ${ms}ms ease`;
+          gone.style.opacity = "0";
+        }
+      }
+    }
+    img.style.zIndex = "3";
+    img.style.transition = `transform ${ms}ms ease`;
+    img.style.transform = `translate(${b.left - a.left}px, ${b.top - a.top}px)`;
+    const rook = castleRook(step.uci);
+    if (rook) {
+      const rookImg = el.querySelector(`[data-sq="${rook[0]}"] img`);
+      const rookFrom = el.querySelector(`[data-sq="${rook[0]}"]`);
+      const rookTo = el.querySelector(`[data-sq="${rook[1]}"]`);
+      if (rookImg && rookFrom && rookTo) {
+        const c = rookFrom.getBoundingClientRect();
+        const d = rookTo.getBoundingClientRect();
+        rookImg.style.zIndex = "2";
+        rookImg.style.transition = `transform ${ms}ms ease`;
+        rookImg.style.transform = `translate(${d.left - c.left}px, ${d.top - c.top}px)`;
+      }
+    }
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function advanceStage(dir) {
+    const current = stage;
+    if (!current || current.busy) return;
+    const next = current.index + dir;
+    if (next < 0 || next > current.steps.length) return;
+    current.index = next;
+    if (dir > 0 && next > 0) {
+      current.busy = true;
+      await animateStage();
+      current.busy = false;
+      if (stage !== current) return;
+    }
+    paintStage();
+  }
+
+  function pauseStage() {
+    if (!stage) return;
+    stage.playing = false;
+    clearStageTimer();
+    const play = body.querySelector("[data-insight='play']");
+    if (play) play.classList.remove("is-on");
+  }
+
+  function playStage() {
+    if (!stage?.steps.length) return;
+    if (stage.playing) {
+      pauseStage();
+      return;
+    }
+    if (stage.index >= stage.steps.length) stage.index = 0;
+    const current = stage;
+    current.playing = true;
+    paintStage();
+    const loop = async () => {
+      if (stage !== current || !current.playing) return;
+      if (current.index >= current.steps.length) {
+        pauseStage();
+        return;
+      }
+      await advanceStage(1);
+      if (stage !== current || !current.playing) return;
+      current.timer = setTimeout(loop, 80);
+    };
+    current.timer = setTimeout(loop, 40);
+  }
+
+  function stageHtml(move) {
+    const steps = Array.isArray(move.line) ? move.line : [];
+    const moves = steps.map((step) => `<li>${esc(step.san)}</li>`).join("");
+    const note = steps.length
+      ? "Best line uses the engine evaluation from before the mistake, which already assumes this continuation."
+      : "The engine did not return a longer legal continuation for this position.";
+    return `
+      <div class="cfn-stage">
+        <div class="cfn-evals">
+          <span>Before <b>${esc(shownEval(move.evalBefore, move.color))}</b></span>
+          <span>After ${esc(move.san)} <b>${esc(shownEval(move.evalAfter, move.color))}</b></span>
+          <span>Best line <b>${esc(shownEval(move.evalBefore, move.color))}</b></span>
+        </div>
+        <div class="cfn-mini" aria-label="Recommended continuation"></div>
+        <div class="cfn-transport">
+          <button type="button" data-insight="prev" title="Previous move" ${steps.length ? "" : "disabled"}>‹</button>
+          <button type="button" data-insight="play" title="Play or pause" ${steps.length ? "" : "disabled"}>${stage?.playing ? "Pause" : "Play"}</button>
+          <button type="button" data-insight="replay" title="Replay" ${steps.length ? "" : "disabled"}>Replay</button>
+          <button type="button" data-insight="next" title="Next move" ${steps.length ? "" : "disabled"}>›</button>
+          <label class="cfn-speed">Speed
+            <select data-insight="speed">
+              <option value="0.7" ${stage?.speed === 0.7 ? "selected" : ""}>0.7×</option>
+              <option value="1" ${!stage?.speed || stage.speed === 1 ? "selected" : ""}>1×</option>
+              <option value="1.6" ${stage?.speed === 1.6 ? "selected" : ""}>1.6×</option>
+            </select>
+          </label>
+        </div>
+        ${moves ? `<ol class="cfn-line">${moves}</ol>` : ""}
+        <p class="cfn-eval-note">${note}</p>
+      </div>`;
+  }
+
+  function insightTabs(pack) {
+    const tabs = [
+      { id: "takeaway", label: "Quick Takeaway", desc: "Discover the one move that could have changed your game." },
+      { id: "opening", label: "Opening Mistakes", desc: "Learn from your three biggest opening mistakes." },
+      {
+        id: "endgame",
+        label: "Endgame Takeaway",
+        desc: pack?.endgameEligible
+          ? "See the critical mistake that decided your endgame."
+          : "Available for queenless endgames.",
+        disabled: !pack?.endgameEligible,
+      },
+      { id: "puzzles", label: "Puzzles", desc: "Practice tactical challenges from your game." },
+    ];
+    if (insightTab === "endgame" && !pack?.endgameEligible) insightTab = "takeaway";
+    const current = tabs.find((tab) => tab.id === insightTab) || tabs[0];
+    const buttons = tabs
+      .map((tab) => {
+        const on = tab.id === current.id ? " is-on" : "";
+        const off = tab.disabled ? " is-off" : "";
+        const lock = tab.disabled ? `<i class="cfn-lock" aria-hidden="true"></i>` : "";
+        return `<button type="button" class="cfn-tab${on}${off}" data-tab="${tab.id}" ${tab.disabled ? 'aria-disabled="true" title="Available for queenless endgames."' : ""}>${lock}${tab.label}</button>`;
+      })
+      .join("");
+    return `<div class="cfn-tabs" role="tablist">${buttons}</div><p class="cfn-tab-desc">${esc(current.desc)}</p>`;
+  }
+
+  function insightBody(result, pack, color) {
+    const who = norm((color === "w" ? result.white : result.black)?.name) === norm(settings.username) ? "Your" : "This";
+    if (insightTab === "puzzles") {
+      armStage(null);
+      const button = retryButton(result);
+      return button || `<p class="cfn-quiet">No tactical puzzles from the mistakes in this game.</p>`;
+    }
+    if (insightTab === "opening") {
+      if (!pack.opening.length) {
+        armStage(null);
+        return `<p class="cfn-quiet">Great opening! No major mistakes found.</p>`;
+      }
+      const active = pack.opening.find((move) => move.ply === linePly) || null;
+      if (active) armStage(active);
+      else armStage(null);
+      return pack.opening
+        .map((move, index) => {
+          const open = move.ply === linePly;
+          return `
+            <article class="cfn-miss">
+              <h5>${esc(kindLabel(move.cls))} #${index + 1} — ${esc(moveLabel(move))}</h5>
+              <p>${esc(move.text)}</p>
+              <p class="cfn-miss-meta">${esc(move.best || "Best move")} · ${esc(String(move.drop))}% winning-chance loss</p>
+              <button type="button" data-insight="line" data-line-ply="${move.ply}">${open ? "Hide line" : "View Better Line"}</button>
+              ${open ? stageHtml(move) : ""}
+            </article>`;
+        })
+        .join("");
+    }
+    if (insightTab === "endgame") {
+      if (!pack.endgame) {
+        armStage(null);
+        return `<p class="cfn-quiet">No significant endgame blunder. The queenless ending was handled cleanly.</p>`;
+      }
+      armStage(pack.endgame);
+      return `
+        <h5 class="cfn-take-title">${who} last endgame ${esc(kindLabel(pack.endgame.cls).toLowerCase())}: ${esc(moveLabel(pack.endgame))}</h5>
+        <p>${esc(pack.endgame.text)}</p>
+        <p class="cfn-miss-meta">Correct move: ${esc(pack.endgame.best || "—")} · ${esc(String(pack.endgame.drop))}% winning-chance loss</p>
+        ${stageHtml(pack.endgame)}`;
+    }
+    if (!pack.takeaway) {
+      armStage(null);
+      return `<p class="cfn-quiet">No single move cost a meaningful amount of evaluation.</p>`;
+    }
+    armStage(pack.takeaway);
+    return `
+      <h5 class="cfn-take-title">${who} critical mistake: ${esc(moveLabel(pack.takeaway))}</h5>
+      <p>${esc(pack.takeaway.text)}</p>
+      ${stageHtml(pack.takeaway)}`;
+  }
+
+  function queenlessFen(fen) {
+    const board = String(fen || "").split(" ")[0];
+    return !board.includes("Q") && !board.includes("q");
+  }
+
+  function moverCp(whiteCp, color) {
+    if (whiteCp == null || Number.isNaN(Number(whiteCp))) return null;
+    const value = Number(whiteCp);
+    return color === "w" ? value : -value;
+  }
+
+  function formatEval(whiteCp, color) {
+    const value = moverCp(whiteCp, color);
+    if (value == null) return "unclear";
+    if (Math.abs(value) >= 9000) return value > 0 ? "mate" : "getting mated";
+    const pawns = value / 100;
+    return `${pawns > 0 ? "+" : ""}${pawns.toFixed(1)}`;
+  }
+
+  function explainMistake({ san, best, evalBefore, evalAfter, color }) {
+    const before = moverCp(evalBefore, color);
+    const after = moverCp(evalAfter, color);
+    const alternative = best ? `playing ${best}` : "the engine's best move";
+    const beforeText = formatEval(evalBefore, color);
+    const afterText = formatEval(evalAfter, color);
+    if (before == null || after == null) return `${san} was worse than ${alternative}.`;
+    if (after <= -150 && before > -80) {
+      return `${alternative} would have avoided a lost position. ${san} left the evaluation at ${afterText}.`;
+    }
+    if (before >= 150 && after < 80) {
+      return `${alternative} would have kept a clear advantage. ${san} dropped it from ${beforeText} to ${afterText}.`;
+    }
+    const lost = before - after;
+    if (lost >= 80) return `${alternative} holds the evaluation near ${beforeText} instead of ${afterText} after ${san}.`;
+    return `${alternative} was the stronger choice. ${san} made the position worse by about ${Math.max(0, lost / 100).toFixed(1)} pawns.`;
+  }
+
+  function packInsight(ply) {
+    return {
+      ply: ply.ply,
+      moveNumber: ply.moveNumber,
+      color: ply.color,
+      san: ply.san,
+      uci: ply.uci,
+      best: ply.best,
+      bestUci: ply.bestUci,
+      drop: ply.drop,
+      cls: ply.cls,
+      fen: ply.fen,
+      evalBefore: ply.evalBefore ?? null,
+      evalAfter: ply.evalAfter ?? null,
+      line: Array.isArray(ply.line) ? ply.line : [],
+      text: explainMistake({
+        san: ply.san,
+        best: ply.best,
+        evalBefore: ply.evalBefore,
+        evalAfter: ply.evalAfter,
+        color: ply.color,
+      }),
+    };
+  }
+
+  function lossPawns(ply) {
+    const before = moverCp(ply.evalBefore, ply.color);
+    const after = moverCp(ply.evalAfter, ply.color);
+    if (before == null || after == null) return 0;
+    return Math.max(0, (before - after) / 100);
+  }
+
+  function buildInsights(plies, color) {
+    const mine = (plies || []).filter((ply) => {
+      const alt = ply.best || ply.bestUci;
+      return ply.color === color && alt && alt !== "(none)";
+    });
+    const worth = (ply) =>
+      ply.cls === "blunder" ||
+      ply.cls === "mistake" ||
+      ply.cls === "inaccuracy" ||
+      (ply.drop || 0) >= 5 ||
+      lossPawns(ply) >= 0.8;
+    const serious = (ply) =>
+      ply.cls === "blunder" || ply.cls === "mistake" || (ply.drop || 0) >= 10 || lossPawns(ply) >= 1.5;
+    const takeaway =
+      mine.filter((ply) => (ply.drop || 0) >= 5 || lossPawns(ply) >= 0.8).sort((a, b) => b.drop - a.drop || a.ply - b.ply)[0] ||
+      null;
+    const opening = mine
+      .filter((ply) => ply.moveNumber <= 12 && worth(ply))
+      .sort((a, b) => lossPawns(b) - lossPawns(a) || b.drop - a.drop || a.ply - b.ply)
+      .slice(0, 3)
+      .map(packInsight);
+    const queenless = mine.filter((ply) => queenlessFen(ply.fen));
+    const fromEnd = [...queenless].reverse();
+    const endgame = fromEnd.find(serious) || fromEnd.find(worth) || null;
+    return {
+      takeaway: takeaway ? packInsight(takeaway) : null,
+      opening,
+      endgameEligible: queenless.length > 0,
+      endgame: endgame ? packInsight(endgame) : null,
+    };
+  }
+
+  function renderInsights(result) {
+    const color = focusColor(result) || "w";
+    const pack = result.plies?.length ? buildInsights(result.plies, color) : result.insights?.[color];
+    if (!pack) {
+      armStage(null);
+      return `<p class="cfn-quiet">Run this review again to load the takeaway, opening, and endgame lines.</p>`;
+    }
+    const named = focusColor(result);
+    const note = named ? "" : `<p class="cfn-quiet">Showing White. Open the game from ChessRadar to follow a specific player.</p>`;
+    return `${note}${insightTabs(pack)}<div class="cfn-tab-panel">${insightBody(result, pack, color)}</div>`;
+  }
+
   function renderResult(r) {
     const countCell = (cls, color, n) =>
       `<td class="cfn-rv-count${n ? " can-step" : ""}" data-cls="${cls}" data-color="${color}" title="${n ? "Click to step through these moves" : ""}">${n}</td>`;
@@ -397,30 +926,11 @@
         </tr>`
     ).join("");
 
-    const moments = r.plies.filter((p) => KEY_CLASSES.has(p.cls));
-    const list = moments.length
-      ? moments
-          .map((p) => {
-            const num = `${p.moveNumber}${p.color === "w" ? "." : "…"}`;
-            const best = p.best ? `<span class="cfn-rv-best">Best: ${esc(p.best)}</span>` : "";
-            return `
-              <li class="cfn-cls-${p.cls}" data-ply="${p.ply}" title="${p.cls === "brilliant" ? "Sound piece sacrifice" : `Lost ${p.drop}% winning chance`}">
-                <span class="cfn-rv-icon">${byId[p.cls].icon}</span>
-                <span class="cfn-rv-move">${num} ${esc(p.san)}</span>
-                <span class="cfn-rv-cls">${byId[p.cls].label}</span>
-                ${best}
-              </li>`;
-          })
-          .join("")
-      : `<li class="cfn-rv-clean">No inaccuracies, mistakes or blunders. Clean game!</li>`;
-
     return `
-      <div class="cfn-rv-players">${playerCard(r.white, "white")}${playerCard(r.black, "black")}</div>
+      <div class="cfn-rv-players">${playerCard(shownPlayer(r.white, "white", r), "white")}${playerCard(shownPlayer(r.black, "black", r), "black")}</div>
       ${renderGraph(r)}
       <table class="cfn-rv-table">${rows}</table>
-      <h4>Key moments <span>${moments.length}</span></h4>
-      <ul class="cfn-rv-moments">${list}</ul>
-      ${retryButton(r)}`;
+      ${renderInsights(r)}`;
   }
 
   function retryButton(result) {
@@ -848,9 +1358,11 @@
     const meta = byId[item.cls] || { label: "Mistake", icon: "?" };
     const who = puzzle.own
       ? "Your move"
-      : item.color === "w"
-        ? `${esc(state.result.white.name)} to move`
-        : `${esc(state.result.black.name)} to move`;
+      : settings.hideOpponent
+        ? "Opponent to move"
+        : item.color === "w"
+          ? `${esc(state.result.white.name)} to move`
+          : `${esc(state.result.black.name)} to move`;
     const noteClass =
       puzzle.phase === "solved" ? " is-good" : puzzle.phase === "wrong" ? " is-wrong" : "";
     const note =
@@ -1016,6 +1528,10 @@
     return true;
   }
 
+  root.addEventListener("change", (e) => {
+    if (e.target.matches("[data-insight='speed']") && stage) stage.speed = Number(e.target.value) || 1;
+  });
+
   root.addEventListener("click", (e) => {
     if (e.target.closest(".cfn-rv-launch")) {
       open = true;
@@ -1026,6 +1542,41 @@
     if (e.target.closest(".cfn-rv-close")) {
       open = false;
       sync();
+      return;
+    }
+    const tab = e.target.closest("[data-tab]");
+    if (tab) {
+      if (tab.getAttribute("aria-disabled") === "true") return;
+      insightTab = tab.dataset.tab;
+      if (insightTab !== "opening") linePly = 0;
+      render();
+      return;
+    }
+    const insight = e.target.closest("[data-insight]");
+    if (insight) {
+      const kind = insight.dataset.insight;
+      if (kind === "line") {
+        const ply = Number(insight.dataset.linePly);
+        linePly = linePly === ply ? 0 : ply;
+        render();
+        return;
+      }
+      if (kind === "play") playStage();
+      else if (kind === "pause") pauseStage();
+      else if (kind === "replay") {
+        pauseStage();
+        if (stage) {
+          stage.index = 0;
+          paintStage();
+          playStage();
+        }
+      } else if (kind === "prev") {
+        pauseStage();
+        void advanceStage(-1);
+      } else if (kind === "next") {
+        pauseStage();
+        void advanceStage(1);
+      }
       return;
     }
     if (e.target.closest("[data-action='analyze']")) {
@@ -1085,6 +1636,7 @@
   function stop() {
     clearInterval(timer);
     stopPlay();
+    stopStage();
     stopPuzzleWatch();
     clearPuzzleMarks();
     window.__cfnPuzzleActive = false;

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Opening theory — ChessRadar</title>
+  <link rel="icon" href="icons/favicon.ico" sizes="any" />
+  <link rel="icon" href="icons/icon128.png" type="image/png" />
+  <link rel="stylesheet" href="theory.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand-lockup">
+      <img class="logo" src="icons/icon128.png" alt="" />
+      <div>
+        <p class="eyebrow">ChessRadar</p>
+        <h1 id="title">Opening theory</h1>
+      </div>
+    </div>
+    <button id="backBtn" class="btn ghost" type="button" hidden>All openings</button>
+  </header>
+
+  <section id="picker" class="picker">
+    <p class="lead">Choose an opening. The line is built from ChessDB, the Lichess opening names, and Lichess master games when that service responds. You can play a different move at any time, or analyse the position with the engine selected in Settings.</p>
+    <input id="filter" type="search" placeholder="Search openings, for example Najdorf" />
+    <div id="openingList" class="opening-list"></div>
+  </section>
+
+  <section id="lesson" class="lesson" hidden>
+    <div class="board-wrap">
+      <div id="board" class="board" aria-label="Opening board"></div>
+      <p id="coords" class="coords"></p>
+    </div>
+    <aside class="coach">
+      <p id="eco" class="eco"></p>
+      <h2 id="prompt">Loading the line…</h2>
+      <p id="explain" class="explain"></p>
+      <p id="status" class="status"></p>
+      <div id="feedback" class="feedback" hidden></div>
+      <div id="analysis" class="analysis" hidden></div>
+      <div class="actions">
+        <button id="bookBtn" class="btn primary" type="button">Play the book move</button>
+        <button id="analyseBtn" class="btn secondary" type="button">Analyse position</button>
+        <button id="undoBtn" class="btn ghost" type="button">Undo</button>
+      </div>
+    </aside>
+  </section>
+  <script type="module" src="theory.js"></script>
+</body>
+</html>

@@ -30,7 +30,7 @@
       const a = document.createElement("a");
       a.href = href;
       a.textContent = "Profile";
-      a.style.cssText = "flex:none;color:#fff;background:#81b64c;padding:6px 10px;border-radius:8px;text-decoration:none;font-weight:700";
+      a.style.cssText = "flex:none;color:#fff;background:#c084fc;padding:6px 10px;border-radius:8px;text-decoration:none;font-weight:700";
       el.append(a);
     }
     const x = document.createElement("button");

@@ -14,7 +14,10 @@ function applySettings(saved = {}) {
     evalBar: true,
     bestMove: true,
     analyzeGame: true,
+    hideOpponent: false,
+    blunderAlerts: false,
     followNextGame: true,
+    engineId: "stockfish-lite",
     ...saved,
     watchedPlayers: saved.watchedPlayers || saved.manualFriends || [],
     hiddenPlayers: saved.hiddenPlayers || [],
@@ -31,7 +34,10 @@ function fillSettingsForm() {
   $("evalBar").checked = settings.evalBar;
   $("bestMove").checked = settings.bestMove;
   $("analyzeGame").checked = settings.analyzeGame;
+  if ($("hideOpponent")) $("hideOpponent").checked = !!settings.hideOpponent;
+  if ($("blunderAlerts")) $("blunderAlerts").checked = !!settings.blunderAlerts;
   $("followNextGame").checked = settings.followNextGame;
+  if ($("engineId")) $("engineId").value = settings.engineId || "stockfish-lite";
   for (const box of $("timeclasses").querySelectorAll("input")) {
     box.checked = settings.timeclasses[box.value] !== false;
   }
@@ -49,6 +55,7 @@ async function renderData() {
   ]);
   nextCheck = data.nextCheck || 0;
   renderBell();
+  renderAccount();
   renderStats(data.myStats);
   renderPlayers(data.statuses || {}, data.apiFriends || [], data.scrapedFriends || [], data.friendsStatus || null);
   lastCheck = data.lastCheck || 0;
@@ -103,6 +110,65 @@ function signed(n) {
   return n > 0 ? `+${n}` : String(n);
 }
 
+let accountProfile = { username: "", avatar: "", loaded: false };
+
+function showAccountAvatar(url) {
+  const img = $("accountAvatar");
+  const letter = $("accountLetter");
+  if (url) {
+    img.hidden = false;
+    letter.hidden = true;
+    if (img.src !== url) img.src = url;
+    return;
+  }
+  img.hidden = true;
+  img.removeAttribute("src");
+  letter.hidden = false;
+}
+
+function renderAccount() {
+  const name = (settings.username || "").trim();
+  const chip = $("accountChip");
+  const empty = $("accountEmpty");
+  if (!name) {
+    chip.hidden = true;
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+  chip.hidden = false;
+  const key = name.toLowerCase();
+  $("accountName").textContent = name;
+  $("accountLetter").textContent = name.slice(0, 1).toUpperCase();
+  chip.href = `https://www.chess.com/member/${encodeURIComponent(name)}`;
+  chip.title = `${name} on Chess.com`;
+  if (accountProfile.username !== key) {
+    accountProfile = { username: key, avatar: "", loaded: false };
+    showAccountAvatar("");
+    loadAccountAvatar(name);
+    return;
+  }
+  showAccountAvatar(accountProfile.avatar);
+}
+
+async function loadAccountAvatar(name) {
+  const key = name.toLowerCase();
+  let avatar = "";
+  try {
+    const res = await fetch(`https://api.chess.com/pub/player/${encodeURIComponent(name)}`);
+    if (res.ok) {
+      const info = await res.json();
+      avatar = info.avatar || "";
+      if (info.username && norm(settings.username) === key) $("accountName").textContent = info.username;
+    }
+  } catch {
+    avatar = "";
+  }
+  if (norm(settings.username) !== key) return;
+  accountProfile = { username: key, avatar, loaded: true };
+  showAccountAvatar(avatar);
+}
+
 function renderStats(stats) {
   if (!stats || !settings.username) {
     $("statsSection").hidden = true;
@@ -130,14 +196,12 @@ function renderStats(stats) {
     if (today?.change) {
       delta.textContent = `${signed(today.change)} today`;
       delta.classList.add(today.change > 0 ? "up" : "down");
-    } else {
-      delta.textContent = today ? "±0 today" : "\u00a0";
     }
 
     const pct = document.createElement("div");
     pct.className = "pct";
     if (r?.percentile != null) {
-      pct.innerHTML = '<span class="pct-label">Percentile</span><span class="pct-value"></span>';
+      pct.innerHTML = '<span class="pct-label">better than </span><span class="pct-value"></span>';
       pct.querySelector(".pct-value").textContent = `${r.percentile}%`;
       pct.classList.add(r.percentile >= 90 ? "pct-top" : r.percentile >= 50 ? "pct-mid" : "pct-low");
       const tips = [`Better than ${r.percentile}% of ${tc} players`];
@@ -145,9 +209,10 @@ function renderStats(stats) {
       if (r.best) tips.push(`Best rating: ${r.best}`);
       card.title = tips.join("\n");
     } else {
-      pct.innerHTML = '<span class="pct-label">Percentile</span><span class="pct-value">–</span>';
+      pct.innerHTML = '<span class="pct-label">better than </span><span class="pct-value">–</span>';
     }
-    card.append(label, value, delta, pct);
+    card.append(label, value, pct);
+    if (today?.change) card.insertBefore(delta, pct);
     box.append(card);
   }
 
@@ -218,11 +283,16 @@ function playerRow(s, { removable = false } = {}) {
   dot.className = "dot " + (s.activity === "playing" ? "playing" : s.status !== "offline" ? "online" : "");
   li.append(dot);
 
+  const avatar = document.createElement(s.avatar ? "img" : "span");
+  avatar.className = "avatar";
   if (s.avatar) {
-    const img = document.createElement("img");
-    img.src = s.avatar;
-    li.append(img);
+    avatar.src = s.avatar;
+    avatar.alt = "";
+  } else {
+    avatar.classList.add("avatar-letter");
+    avatar.textContent = (s.username || "?").slice(0, 1).toUpperCase();
   }
+  li.append(avatar);
 
   const info = document.createElement("div");
   info.className = "player-info";
@@ -329,6 +399,8 @@ function emptyFriendsMessage(friendsStatus) {
 }
 
 function renderPlayers(statuses, apiFriends = [], scrapedFriends = [], friendsStatus = null) {
+  const hint = $("refreshHint");
+  if (hint) hint.hidden = !friendsStatus?.needsTab;
   const byName = new Map(Object.values(statuses).map((s) => [norm(s.username), s]));
   const sort = (a, b) => rank(a) - rank(b) || a.username.localeCompare(b.username);
 
@@ -337,10 +409,34 @@ function renderPlayers(statuses, apiFriends = [], scrapedFriends = [], friendsSt
     .sort(sort);
   const watchList = $("watched");
   watchList.replaceChildren();
-  const playing = watched.filter((s) => s.activity === "playing").length;
-  $("watchCount").textContent = watched.length
-    ? `(${watched.length}) · ${playing} playing`
-    : "";
+  const playingRows = watched.filter((s) => s.activity === "playing");
+  const playing = playingRows.length;
+  const noun = watched.length === 1 ? "friend" : "friends";
+  $("watchCount").textContent = watched.length ? String(watched.length) : "";
+  $("friendsSummary").textContent = !settings.username
+    ? "Set your username in Settings first"
+    : watched.length
+      ? `${watched.length} ${noun} · ${playing} playing`
+      : "No friends yet";
+  const playingList = $("playingNow");
+  const playingEmpty = $("playingEmpty");
+  playingList.replaceChildren();
+  if (!playing) {
+    playingList.hidden = true;
+    playingEmpty.hidden = false;
+  } else {
+    playingList.hidden = false;
+    playingEmpty.hidden = true;
+    const shown = playingRows.slice(0, 3);
+    for (const s of shown) playingList.append(playerRow(s, { removable: false }));
+    if (playingRows.length > shown.length) {
+      const more = document.createElement("li");
+      more.className = "more-playing";
+      more.textContent = `See ${playingRows.length - shown.length} more playing`;
+      more.onclick = () => showFriends(true);
+      playingList.append(more);
+    }
+  }
   if (!watched.length) {
     const msg = emptyFriendsMessage(friendsStatus);
     watchList.append(emptyRow(msg.title, msg.detail));
@@ -363,7 +459,10 @@ $("save").onclick = async () => {
   settings.evalBar = $("evalBar").checked;
   settings.bestMove = $("bestMove").checked;
   settings.analyzeGame = $("analyzeGame").checked;
+  settings.hideOpponent = !!$("hideOpponent").checked;
+  settings.blunderAlerts = !!$("blunderAlerts").checked;
   settings.followNextGame = $("followNextGame").checked;
+  settings.engineId = $("engineId").value;
   settings.tiltLimit = Number($("tiltLimit").value);
   for (const box of $("timeclasses").querySelectorAll("input")) {
     settings.timeclasses[box.value] = box.checked;
@@ -384,11 +483,38 @@ $("save").onclick = async () => {
 
 function showSettings(open) {
   $("settingsPanel").hidden = !open;
-  $("watchPanel").hidden = open;
+  $("homePanel").hidden = open;
+  if (open) $("friendsPanel").hidden = true;
+  $("openFriends").setAttribute("aria-expanded", "false");
   $("settingsToggle").classList.toggle("active", open);
   $("settingsToggle").setAttribute("aria-pressed", String(open));
   $("settingsToggle").title = open ? "Close settings" : "Settings";
 }
+
+function showFriends(open) {
+  if (open) {
+    $("settingsPanel").hidden = true;
+    $("homePanel").hidden = false;
+    $("settingsToggle").classList.remove("active");
+    $("settingsToggle").setAttribute("aria-pressed", "false");
+    $("settingsToggle").title = "Settings";
+  }
+  $("friendsPanel").hidden = !open;
+  $("openFriends").setAttribute("aria-expanded", String(open));
+  if (open) $("addWatch").focus();
+}
+
+$("openFriends").onclick = () => showFriends(true);
+$("learnTheory").onclick = () => chrome.tabs.create({ url: chrome.runtime.getURL("theory.html") });
+$("closeFriends").onclick = () => showFriends(false);
+$("friendsPanel").onclick = (e) => {
+  if (e.target === $("friendsPanel")) showFriends(false);
+};
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("friendsPanel").hidden) showFriends(false);
+  else if (!$("settingsPanel").hidden) showSettings(false);
+});
 
 $("followNextGame").onchange = async () => {
   settings.followNextGame = $("followNextGame").checked;
@@ -396,6 +522,14 @@ $("followNextGame").onchange = async () => {
 };
 $("analyzeGame").onchange = async () => {
   settings.analyzeGame = $("analyzeGame").checked;
+  await chrome.storage.local.set({ settings });
+};
+$("hideOpponent").onchange = async () => {
+  settings.hideOpponent = $("hideOpponent").checked;
+  await chrome.storage.local.set({ settings });
+};
+$("blunderAlerts").onchange = async () => {
+  settings.blunderAlerts = $("blunderAlerts").checked;
   await chrome.storage.local.set({ settings });
 };
 $("evalBar").onchange = async () => {
@@ -408,6 +542,8 @@ $("bestMove").onchange = async () => {
 };
 
 $("settingsToggle").onclick = () => showSettings($("settingsPanel").hidden);
+$("accountEmpty").onclick = () => showSettings(true);
+$("accountAvatar").onerror = () => showAccountAvatar("");
 
 $("addBtn").onclick = async () => {
   const pick = suggestItems[suggestIndex] || suggestItems[0];

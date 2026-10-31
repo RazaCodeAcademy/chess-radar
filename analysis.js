@@ -1,6 +1,8 @@
 // Full-game review: replays a game and scores every move with a dedicated Stockfish worker.
 import { Chess } from "./lib/chess.js";
 import { decodeTcn } from "./lib/tcn.js";
+import { buildInsights, legalContinuation } from "./lib/insights.js";
+import { beginAnalysis, endAnalysis, engineSearch } from "./engine-host.js";
 
 const SEARCH = "go depth 12 movetime 800";
 const MATE_CP = 10000;
@@ -32,44 +34,17 @@ function isBrilliantSacrifice(fenBefore, move) {
   return gave > took;
 }
 
-let engine = null;
-let ready = null;
-let pending = null;
 let currentRun = 0;
 const cache = new Map();
 
-function startEngine() {
-  if (engine) return ready;
-  engine = new Worker("engine/stockfish-19-lite-single.js");
-  let readyResolve;
-  ready = new Promise((r) => (readyResolve = r));
-  let info = {};
-  engine.onmessage = (e) => {
-    const line = typeof e.data === "string" ? e.data : "";
-    if (line === "uciok") engine.postMessage("isready");
-    else if (line === "readyok") readyResolve();
-    else if (line.startsWith("info") && line.includes(" score ") && !line.includes("bound")) {
-      const cp = line.match(/ score cp (-?\d+)/);
-      const mate = line.match(/ score mate (-?\d+)/);
-      info = { cp: cp ? Number(cp[1]) : null, mate: mate ? Number(mate[1]) : null };
-    } else if (line.startsWith("bestmove") && pending) {
-      const resolve = pending;
-      pending = null;
-      resolve({ ...info, bestmove: line.split(" ")[1] });
-      info = {};
-    }
-  };
-  engine.postMessage("uci");
-  return ready;
-}
-
 async function search(fen) {
-  await startEngine();
-  return new Promise((resolve) => {
-    pending = resolve;
-    engine.postMessage(`position fen ${fen}`);
-    engine.postMessage(SEARCH);
-  });
+  try {
+    return await engineSearch(fen, SEARCH, { kind: "analysis" });
+  } catch (err) {
+    if (String(err?.message || "").includes("replaced")) throw err;
+    // The worker is replaced after a crash. One retry covers a single unreachable abort.
+    return engineSearch(fen, SEARCH, { kind: "analysis" });
+  }
 }
 
 // Centipawns from White's point of view, with mates mapped to large values.
@@ -101,17 +76,19 @@ async function evaluatePosition(fen, board) {
   if (board.isDraw() || board.isStalemate()) return { cp: 0, bestmove: null, mate: null };
   const res = await search(fen);
   const mate = res.mate != null && res.mate !== 0 ? res.mate * (turn === "w" ? 1 : -1) : null;
-  return { cp: whiteCp(res, turn), bestmove: res.bestmove, mate };
+  return { cp: whiteCp(res, turn), bestmove: res.bestmove, mate, pv: res.pv || [] };
 }
 
 // Piece placement + side to move: what the page's board can be matched on.
 const positionKey = (fen) => fen.split(" ").slice(0, 2).join(" ");
 
 async function analyze({ gameId, moveList, finished, players }, onProgress) {
-  const key = `v3:${gameId}:${moveList.length}`;
+  const key = `v4:${gameId}:${moveList.length}`;
   if (finished && cache.has(key)) return cache.get(key);
 
   const run = ++currentRun;
+  beginAnalysis();
+  try {
   const board = new Chess();
   const positions = [{ fen: board.fen(), legal: board.moves().length }];
   const moves = [];
@@ -152,7 +129,7 @@ async function analyze({ gameId, moveList, finished, players }, onProgress) {
     let cls;
     if (isBest && drop < 2 && moverCp < 700 && isBrilliantSacrifice(positions[i].fen, m)) cls = "brilliant";
     else if (isBest) cls = "best";
-    else cls = CLASSES.find((c) => drop >= c.minDrop).name;
+    else cls = CLASSES.find((c) => drop >= c.minDrop)?.name || "good";
     const side = sides[m.color];
     side.drops.push(drop);
     side.counts[cls] = (side.counts[cls] || 0) + 1;
@@ -168,7 +145,9 @@ async function analyze({ gameId, moveList, finished, players }, onProgress) {
       cls,
       drop: Math.round(drop * 10) / 10,
       best: cls === "best" || cls === "brilliant" ? null : sanOf(positions[i].fen, bestUci),
+      evalBefore: evals[i].cp,
       evalAfter: evals[i + 1].cp,
+      line: legalContinuation(positions[i].fen, evals[i].pv, bestUci),
     };
   });
 
@@ -194,9 +173,16 @@ async function analyze({ gameId, moveList, finished, players }, onProgress) {
       matedSide: e.matedSide || null,
     })),
     plies,
+    insights: {
+      w: buildInsights(plies, "w"),
+      b: buildInsights(plies, "b"),
+    },
   };
   if (finished) cache.set(key, result);
   return result;
+  } finally {
+    endAnalysis();
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

@@ -1,5 +1,6 @@
 import { CfnBoard } from "./lib/cfn-board.js";
 import { Chess } from "./lib/chess.js";
+import { hideCorrectMove, showCorrectMove } from "./celebrate.js";
 
 const CLASS_LABEL = {
   blunder: "Blunder",
@@ -47,6 +48,7 @@ const els = {
 };
 
 let session = null;
+let hideOpponent = false;
 let board = null;
 let index = 0;
 let step = 0;
@@ -54,6 +56,7 @@ let attempts = 0;
 let hints = 0;
 let hintLevel = 0;
 let solved = false;
+let revealed = false;
 let startedAt = Date.now();
 let advanceTimer = 0;
 let totals = { solved: 0, incorrect: 0, hints: 0 };
@@ -126,6 +129,11 @@ function accuracyClass(a) {
 function playerSummaryCard(side) {
   const player = asPlayer(playerRecord(side), side === "w" ? "White" : "Black");
   const you = session.own === side;
+  const masked = hideOpponent && session.own && session.own !== side;
+  if (masked) {
+    player.name = "Opponent";
+    player.rating = null;
+  }
   const rating = player.rating != null ? esc(player.rating) : "—";
   return `
     <div class="rv-player ${side}">
@@ -219,12 +227,18 @@ function renderChrome() {
     })
     .join("");
   els.hintBtn.disabled = solved;
-  els.solutionBtn.disabled = solved;
+  els.solutionBtn.disabled = solved && !revealed;
+  els.solutionBtn.textContent = revealed
+    ? index + 1 >= session.puzzles.length
+      ? "See results"
+      : "Next puzzle"
+    : "Show solution";
   renderReview();
 }
 
 function loadPuzzle() {
   clearTimeout(advanceTimer);
+  hideCorrectMove();
   const puzzle = currentPuzzle();
   if (!puzzle) return showResults();
   els.playPanel.hidden = false;
@@ -234,6 +248,8 @@ function loadPuzzle() {
   hints = 0;
   hintLevel = 0;
   solved = false;
+  revealed = false;
+  els.solutionBtn.textContent = "Show solution";
   board.setOrientation(session.orientation || puzzle.color || "w");
   board.setInteractive(true);
   board.loadFen(puzzle.fen);
@@ -288,7 +304,11 @@ function finishPuzzle(correct) {
   renderChrome();
   if (correct) {
     clearTimeout(advanceTimer);
-    advanceTimer = setTimeout(() => nextPuzzle(), 750);
+    showCorrectMove({ move: puzzle.best || "" });
+    advanceTimer = setTimeout(() => {
+      hideCorrectMove();
+      nextPuzzle();
+    }, 2200);
   }
 }
 
@@ -362,10 +382,11 @@ function showSolution() {
   const uci = String(line[step] || puzzle.bestUci || "");
   const from = uci.slice(0, 2);
   const to = uci.slice(2, 4);
-  hints += 1;
-  totals.hints += 1;
+  const promotion = uci.slice(4, 5) || undefined;
+  board.tryMove(from, to, promotion);
   board.setMarks({ good: [from, to], arrow: { from, to } });
-  setNote(`Solution: ${puzzle.best || uci}`);
+  setNote(puzzle.best ? `Solution: ${puzzle.best}.` : `Solution: ${uci}.`);
+  revealed = true;
   finishPuzzle(false);
 }
 
@@ -385,6 +406,9 @@ function showResults() {
     ? Math.round((totals.solved / (totals.solved + wrongAttempts)) * 1000) / 10
     : 0;
   const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+  const missed = session.puzzles.filter((_, i) => !perPuzzle[i]?.correct).length;
+  els.retryMissedBtn.disabled = missed === 0;
+  els.retryMissedBtn.textContent = missed ? `Retry missed puzzles (${missed})` : "No missed puzzles";
   els.resultGrid.innerHTML = `
     <div><strong>${total}</strong><span>Total puzzles</span></div>
     <div><strong>${totals.solved}</strong><span>Correct solutions</span></div>
@@ -431,6 +455,13 @@ async function boot() {
       : "Puzzle data was not found. Return to the game and click Retry Your Blunders again.");
   }
   session = res.session;
+  const stored = await chrome.storage.local.get("settings");
+  hideOpponent = !!stored.settings?.hideOpponent;
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes.settings) return;
+    hideOpponent = !!changes.settings.newValue?.hideOpponent;
+    renderReview();
+  });
   board = new CfnBoard(els.boardHost, {
     orientation: session.orientation || "w",
     onMove: onPlayerMove,
@@ -444,15 +475,24 @@ els.hintBtn.addEventListener("click", applyHint);
 els.retryBtn.addEventListener("click", () => {
   if (!currentPuzzle()) return;
   clearTimeout(advanceTimer);
+  hideCorrectMove();
   board.loadFen(currentPuzzle().fen);
   board.setMarks({});
   step = 0;
   solved = false;
   board.setInteractive(true);
   setNote("Play the best move on the board.");
+  revealed = false;
+  els.solutionBtn.textContent = "Show solution";
   renderChrome();
 });
-els.solutionBtn.addEventListener("click", showSolution);
+els.solutionBtn.addEventListener("click", () => {
+  if (revealed) {
+    nextPuzzle();
+    return;
+  }
+  showSolution();
+});
 els.exitBtn.addEventListener("click", () => window.close());
 els.retryMissedBtn.addEventListener("click", retryMissed);
 els.returnBtn.addEventListener("click", returnToGame);

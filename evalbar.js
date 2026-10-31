@@ -12,9 +12,9 @@
   const SVG_NS = "http://www.w3.org/2000/svg";
 
   // Remove elements left behind by a previous copy of this script (e.g. after the extension was reloaded).
-  document.querySelectorAll("#cfn-evalbar, #cfn-bestmove, #cfn-bestmove-badge, #cfn-move-icon").forEach((el) => el.remove());
+  document.querySelectorAll("#cfn-evalbar, #cfn-bestmove, #cfn-bestmove-badge, #cfn-move-icon, #cfn-blunder").forEach((el) => el.remove());
 
-  let settings = { username: "", evalBar: true, bestMove: true };
+  let settings = { username: "", evalBar: true, bestMove: true, blunderAlerts: false };
   let lastFen = "";
   let lastBoard = null;
   let lastResult = null;
@@ -71,8 +71,25 @@
       })
       .catch(() => {});
   }
+  const blunderLayer = document.createElement("div");
+  blunderLayer.id = "cfn-blunder";
+  document.documentElement.append(blunderLayer);
+  let blunderTimer = null;
+  let priorEval = null;
+  const alerted = new Set();
+
+  function clearBlunder() {
+    clearTimeout(blunderTimer);
+    blunderTimer = null;
+    blunderLayer.replaceChildren();
+    blunderLayer.style.display = "none";
+  }
+
   chrome.storage.onChanged.addListener((changes) => {
-    if (changes.settings) settings = { ...settings, ...changes.settings.newValue };
+    if (changes.settings) {
+      settings = { ...settings, ...changes.settings.newValue };
+      if (!settings.blunderAlerts) clearBlunder();
+    }
   });
 
   const norm = (s) => String(s || "").trim().toLowerCase();
@@ -215,6 +232,7 @@
 
   let hidden = true;
   function hide() {
+    clearBlunder();
     if (hidden) return;
     hidden = true;
     bar.style.display = "none";
@@ -265,7 +283,7 @@
 
   const CLASS_MARK = {
     brilliant: { icon: "!!", color: "#1baca6" },
-    best: { icon: "★", color: "#81b64c" },
+    best: { icon: "★", color: "#c084fc" },
     excellent: { icon: "!", color: "#5c8bb0" },
     good: { icon: "✓", color: "#95b776" },
     inaccuracy: { icon: "?!", color: "#e6a700" },
@@ -442,23 +460,119 @@
     fill.style.height = `${share}%`;
     score.textContent = scoreText(lastResult);
     score.classList.toggle("cfn-white-ahead", share >= 50);
-    bar.title = lastResult?.depth ? `Stockfish depth ${lastResult.depth}` : "Evaluating…";
+    const engineName = lastResult?.engineName || "Stockfish";
+    bar.title = lastResult?.depth ? `${engineName} depth ${lastResult.depth}` : "Evaluating…";
   }
 
-  function requestEval(fen) {
+  function snapshotBoard(board) {
+    return new Map([...board].map(([key, piece]) => [key, { color: piece.color, type: piece.type }]));
+  }
+
+  function changedSquares(before, after) {
+    const out = [];
+    const keys = new Set([...(before?.keys() || []), ...(after?.keys() || [])]);
+    for (const key of keys) {
+      const a = before?.get(key);
+      const b = after?.get(key);
+      if (!a || !b || a.color !== b.color || a.type !== b.type) out.push(key);
+    }
+    return out;
+  }
+
+  function scoreCp(result) {
+    if (!result) return null;
+    if (result.mate != null && result.mate !== 0) {
+      return Math.sign(result.mate) * (10000 - Math.min(99, Math.abs(result.mate)) * 10);
+    }
+    return result.cp == null ? null : result.cp;
+  }
+
+  function friendColor() {
+    const who = norm(watchUser);
+    if (!who || playerNameAt("bottom") !== who) return "";
+    return isFlipped() ? "b" : "w";
+  }
+
+  function showBlunder(rect, flipped, squares) {
+    blunderLayer.replaceChildren();
+    blunderLayer.style.display = "block";
+    Object.assign(blunderLayer.style, {
+      position: "fixed",
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+      width: `${rect.size}px`,
+      height: `${rect.size}px`,
+      pointerEvents: "none",
+      zIndex: "2147483001",
+    });
+    const cell = rect.size / 8;
+    for (const key of squares) {
+      const file = Number(key[0]);
+      const rank = Number(key[1]);
+      const mark = document.createElement("div");
+      mark.className = "cfn-blunder-sq";
+      mark.style.left = `${(flipped ? 8 - file : file - 1) * cell}px`;
+      mark.style.top = `${(flipped ? rank - 1 : 8 - rank) * cell}px`;
+      mark.style.width = `${cell}px`;
+      mark.style.height = `${cell}px`;
+      blunderLayer.append(mark);
+    }
+    const tag = document.createElement("div");
+    tag.className = "cfn-blunder-tag";
+    tag.textContent = "Blunder";
+    blunderLayer.append(tag);
+    clearTimeout(blunderTimer);
+    blunderTimer = setTimeout(clearBlunder, 2400);
+  }
+
+  function considerBlunder(previous, next, rect, flipped) {
+    if (!settings.blunderAlerts || reviewMode) return;
+    if (!watchUser || alerted.has(next.fen)) return;
+    const mover = next.fen.split(" ")[1] === "w" ? "b" : "w";
+    if (mover !== friendColor()) return;
+    const players = playerNames();
+    if (!players.length || players.includes(norm(settings.username)) || !players.includes(norm(watchUser))) return;
+    const squares = changedSquares(previous.board, next.board);
+    if (squares.length < 2 || squares.length > 4) return;
+    const before = previous.cp;
+    const after = next.cp;
+    if (before == null || after == null) return;
+    const win = (cp) => 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
+    const drop = mover === "w" ? win(before) - win(after) : win(after) - win(before);
+    if (drop < 15) return;
+    alerted.add(next.fen);
+    showBlunder(rect, flipped, squares);
+  }
+
+  function requestEval(fen, board, rect, flipped) {
     clearTimeout(pendingTimer);
+    const shot = snapshotBoard(board);
     pendingTimer = setTimeout(async () => {
       try {
         const res = await chrome.runtime.sendMessage({ type: "evaluate", fen });
-        if (res?.ok && res.fen === lastFen && !reviewMode) lastResult = res;
+        if (!(res?.ok && res.fen === lastFen && !reviewMode)) return;
+        const cp = scoreCp(res);
+        if (priorEval && priorEval.fen !== res.fen && cp != null && priorEval.cp != null) {
+          considerBlunder(priorEval, { fen: res.fen, cp, mate: res.mate, board: shot }, rect, flipped);
+        }
+        if (cp != null) priorEval = { fen: res.fen, cp, mate: res.mate, board: shot };
+        lastResult = res;
       } catch {
         // extension reloaded or engine unavailable
       }
     }, 150);
   }
 
+  let alertGame = "";
+
   function tick({ layoutOnly = false } = {}) {
     if (!location.pathname.startsWith("/game/")) return hide();
+    if (location.pathname !== alertGame) {
+      alertGame = location.pathname;
+      alerted.clear();
+      priorEval = null;
+      clearBlunder();
+    }
     ensureWatchedAtBottom();
     const board = readPieces();
     if (board.size < 2) return hide();
@@ -491,21 +605,26 @@
       reviewMode = false;
       lastFen = "";
       lastResult = null;
+      priorEval = null;
+      clearBlunder();
     }
 
-    if (!settings.evalBar && !settings.bestMove) return hide();
+    if (!settings.evalBar && !settings.bestMove && !settings.blunderAlerts) return hide();
 
     if (!settings.username) {
       hideBestMove();
+      clearBlunder();
+      if (!settings.evalBar) return hide();
       return render(rect, flipped, "Set your chess.com username in the extension popup to enable the evaluation bar.");
     }
     const players = playerNames();
     if (!players.length || players.includes(norm(settings.username))) return hide();
+    if (!settings.blunderAlerts) clearBlunder();
 
     if (!layoutOnly && fen !== lastFen) {
       lastFen = fen;
       lastBoard = board;
-      requestEval(fen);
+      requestEval(fen, board, rect, flipped);
     }
     render(rect, flipped);
     if (window.__cfnPuzzleActive) return hideBestMove();
@@ -523,6 +642,7 @@
     arrowLayer.remove();
     badge.remove();
     moveIcon.remove();
+    blunderLayer.remove();
   }
   window.__cfnEvalbarStop = stop;
 
