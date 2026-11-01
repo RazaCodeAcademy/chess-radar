@@ -2,6 +2,9 @@ const $ = (id) => document.getElementById(id);
 const send = (type) => chrome.runtime.sendMessage({ type });
 
 let settings = {};
+const FRIENDS_PER_PAGE = 10;
+let friendsPage = 0;
+let lastFriendsSnapshot = [];
 
 function applySettings(saved = {}) {
   settings = {
@@ -16,6 +19,8 @@ function applySettings(saved = {}) {
     analyzeGame: true,
     hideOpponent: false,
     blunderAlerts: false,
+    pictureInPicture: true,
+    timeWarning: true,
     followNextGame: true,
     engineId: "stockfish-lite",
     ...saved,
@@ -36,11 +41,78 @@ function fillSettingsForm() {
   $("analyzeGame").checked = settings.analyzeGame;
   if ($("hideOpponent")) $("hideOpponent").checked = !!settings.hideOpponent;
   if ($("blunderAlerts")) $("blunderAlerts").checked = !!settings.blunderAlerts;
+  if ($("pictureInPicture")) $("pictureInPicture").checked = settings.pictureInPicture !== false;
+  if ($("timeWarning")) $("timeWarning").checked = settings.timeWarning !== false;
   $("followNextGame").checked = settings.followNextGame;
   if ($("engineId")) $("engineId").value = settings.engineId || "stockfish-lite";
   for (const box of $("timeclasses").querySelectorAll("input")) {
     box.checked = settings.timeclasses[box.value] !== false;
   }
+}
+
+let playSession = null;
+let playSessionTimer = 0;
+
+function psMode() {
+  return document.querySelector('input[name="psMode"]:checked')?.value === "minutes" ? "minutes" : "games";
+}
+
+function syncPsGoalLabel() {
+  const minutes = psMode() === "minutes";
+  $("psGoalLabel").textContent = minutes ? "Minutes" : "Games";
+  $("psGoal").max = minutes ? "180" : "100";
+  $("psGoal").min = "1";
+  if (!$("psGoal").value) $("psGoal").value = minutes ? "30" : "5";
+}
+
+function playSessionProgressText(s) {
+  if (!s) return "";
+  if (s.mode === "minutes") {
+    const elapsed = Math.max(0, Date.now() - (s.startedAt || 0));
+    const total = Math.max(1, Number(s.goal || 1) * 60_000);
+    const left = Math.max(0, total - elapsed);
+    const mins = Math.floor(left / 60_000);
+    const secs = Math.floor((left % 60_000) / 1000);
+    return `${mins}:${String(secs).padStart(2, "0")} left · ${s.gamesDone || 0} games`;
+  }
+  return `${s.gamesDone || 0} / ${s.goal} games`;
+}
+
+function playSessionRatio(s) {
+  if (!s) return 0;
+  if (s.mode === "minutes") {
+    const elapsed = Math.max(0, Date.now() - (s.startedAt || 0));
+    const total = Math.max(1, Number(s.goal || 1) * 60_000);
+    return Math.min(1, elapsed / total);
+  }
+  return Math.min(1, Number(s.gamesDone || 0) / Math.max(1, Number(s.goal || 1)));
+}
+
+function renderPlaySession(s = playSession) {
+  playSession = s || null;
+  const active = !!playSession?.active;
+  $("playSessionBadge").hidden = !active;
+  $("playSessionSetup").hidden = active;
+  $("playSessionActive").hidden = !active;
+  clearInterval(playSessionTimer);
+
+  const summary = $("playSessionSummary");
+  if (!active) {
+    summary.textContent = "Set a goal, then auto-queue until you hit it";
+    return;
+  }
+
+  const paint = () => {
+    if (!playSession?.active) return;
+    const label = playSessionProgressText(playSession);
+    $("psProgress").textContent = label;
+    $("psFill").style.width = `${Math.round(playSessionRatio(playSession) * 100)}%`;
+    const target = playSession.queueTarget === "rematch" ? "Rematch" : "New Game";
+    $("psActiveHint").textContent = `Auto-queuing ${target} on Chess.com after each game.`;
+    summary.textContent = label;
+  };
+  paint();
+  playSessionTimer = setInterval(paint, 1000);
 }
 
 async function renderData() {
@@ -52,11 +124,13 @@ async function renderData() {
     "apiFriends",
     "scrapedFriends",
     "friendsStatus",
+    "playSession",
   ]);
   nextCheck = data.nextCheck || 0;
   renderBell();
   renderAccount();
   renderStats(data.myStats);
+  renderPlaySession(data.playSession);
   renderPlayers(data.statuses || {}, data.apiFriends || [], data.scrapedFriends || [], data.friendsStatus || null);
   lastCheck = data.lastCheck || 0;
   renderStatus();
@@ -66,6 +140,7 @@ async function load() {
   const { settings: saved } = await chrome.storage.local.get("settings");
   applySettings(saved);
   fillSettingsForm();
+  syncPsGoalLabel();
   await renderData();
 }
 
@@ -398,6 +473,29 @@ function emptyFriendsMessage(friendsStatus) {
   };
 }
 
+function renderFriendsPager(total) {
+  const pager = $("friendsPager");
+  const prev = $("friendsPrev");
+  const next = $("friendsNext");
+  const label = $("friendsPageLabel");
+  if (!pager || !prev || !next || !label) return;
+
+  const pages = Math.max(1, Math.ceil(total / FRIENDS_PER_PAGE));
+  if (friendsPage >= pages) friendsPage = pages - 1;
+  if (friendsPage < 0) friendsPage = 0;
+
+  const show = total > FRIENDS_PER_PAGE;
+  pager.hidden = !show;
+  if (!show) {
+    friendsPage = 0;
+    return;
+  }
+
+  label.textContent = `${friendsPage + 1} / ${pages}`;
+  prev.disabled = friendsPage <= 0;
+  next.disabled = friendsPage >= pages - 1;
+}
+
 function renderPlayers(statuses, apiFriends = [], scrapedFriends = [], friendsStatus = null) {
   const hint = $("refreshHint");
   if (hint) hint.hidden = !friendsStatus?.needsTab;
@@ -407,6 +505,7 @@ function renderPlayers(statuses, apiFriends = [], scrapedFriends = [], friendsSt
   const watched = listedNames(apiFriends, scrapedFriends)
     .map((name) => byName.get(norm(name)) || { username: name, status: "offline", pending: true })
     .sort(sort);
+  lastFriendsSnapshot = watched;
   const watchList = $("watched");
   watchList.replaceChildren();
   const playingRows = watched.filter((s) => s.activity === "playing");
@@ -440,8 +539,14 @@ function renderPlayers(statuses, apiFriends = [], scrapedFriends = [], friendsSt
   if (!watched.length) {
     const msg = emptyFriendsMessage(friendsStatus);
     watchList.append(emptyRow(msg.title, msg.detail));
+    renderFriendsPager(0);
+    return;
   }
-  for (const s of watched) watchList.append(playerRow(s, { removable: true }));
+
+  renderFriendsPager(watched.length);
+  const start = friendsPage * FRIENDS_PER_PAGE;
+  const pageRows = watched.slice(start, start + FRIENDS_PER_PAGE);
+  for (const s of pageRows) watchList.append(playerRow(s, { removable: true }));
 }
 
 async function saveSettings() {
@@ -461,6 +566,8 @@ $("save").onclick = async () => {
   settings.analyzeGame = $("analyzeGame").checked;
   settings.hideOpponent = !!$("hideOpponent").checked;
   settings.blunderAlerts = !!$("blunderAlerts").checked;
+  settings.pictureInPicture = !!$("pictureInPicture").checked;
+  settings.timeWarning = !!$("timeWarning").checked;
   settings.followNextGame = $("followNextGame").checked;
   settings.engineId = $("engineId").value;
   settings.tiltLimit = Number($("tiltLimit").value);
@@ -484,8 +591,12 @@ $("save").onclick = async () => {
 function showSettings(open) {
   $("settingsPanel").hidden = !open;
   $("homePanel").hidden = open;
-  if (open) $("friendsPanel").hidden = true;
+  if (open) {
+    $("friendsPanel").hidden = true;
+    $("playSessionPanel").hidden = true;
+  }
   $("openFriends").setAttribute("aria-expanded", "false");
+  $("openPlaySession").setAttribute("aria-expanded", "false");
   $("settingsToggle").classList.toggle("active", open);
   $("settingsToggle").setAttribute("aria-pressed", String(open));
   $("settingsToggle").title = open ? "Close settings" : "Settings";
@@ -495,6 +606,8 @@ function showFriends(open) {
   if (open) {
     $("settingsPanel").hidden = true;
     $("homePanel").hidden = false;
+    $("playSessionPanel").hidden = true;
+    $("openPlaySession").setAttribute("aria-expanded", "false");
     $("settingsToggle").classList.remove("active");
     $("settingsToggle").setAttribute("aria-pressed", "false");
     $("settingsToggle").title = "Settings";
@@ -504,15 +617,104 @@ function showFriends(open) {
   if (open) $("addWatch").focus();
 }
 
+function showPlaySession(open) {
+  if (open) {
+    $("settingsPanel").hidden = true;
+    $("homePanel").hidden = false;
+    $("friendsPanel").hidden = true;
+    $("openFriends").setAttribute("aria-expanded", "false");
+    $("settingsToggle").classList.remove("active");
+    $("settingsToggle").setAttribute("aria-pressed", "false");
+    $("settingsToggle").title = "Settings";
+  }
+  $("playSessionPanel").hidden = !open;
+  $("openPlaySession").setAttribute("aria-expanded", String(open));
+  if (open && !playSession?.active) $("psGoal").focus();
+}
+
 $("openFriends").onclick = () => showFriends(true);
+$("openPlaySession").onclick = () => showPlaySession(true);
 $("learnTheory").onclick = () => chrome.tabs.create({ url: chrome.runtime.getURL("theory.html") });
 $("closeFriends").onclick = () => showFriends(false);
+$("closePlaySession").onclick = () => showPlaySession(false);
+
+for (const box of document.querySelectorAll('input[name="psMode"]')) {
+  box.addEventListener("change", syncPsGoalLabel);
+}
+
+$("psStart").onclick = async () => {
+  $("psError").hidden = true;
+  $("psError").textContent = "";
+  if (!settings.username) {
+    $("psError").hidden = false;
+    $("psError").textContent = "Add your Chess.com username in Settings first.";
+    return;
+  }
+  const mode = psMode();
+  const goal = Number($("psGoal").value);
+  if (!Number.isFinite(goal) || goal < 1) {
+    $("psError").hidden = false;
+    $("psError").textContent = "Enter a goal of at least 1.";
+    return;
+  }
+  const btn = $("psStart");
+  btn.disabled = true;
+  btn.textContent = "Starting…";
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "playSessionStart",
+      mode,
+      goal,
+      queueTarget: $("psQueue").value,
+    });
+    if (!res?.ok) throw new Error(res?.error || "Could not start session.");
+    renderPlaySession(res.session);
+  } catch (err) {
+    $("psError").hidden = false;
+    $("psError").textContent = err?.message || "Could not start session.";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Start session";
+  }
+};
+
+$("psStop").onclick = async () => {
+  const res = await chrome.runtime.sendMessage({ type: "playSessionStop" });
+  renderPlaySession(res?.session || null);
+};
+$("friendsPrev").onclick = () => {
+  if (friendsPage <= 0) return;
+  friendsPage -= 1;
+  const watchList = $("watched");
+  watchList.replaceChildren();
+  renderFriendsPager(lastFriendsSnapshot.length);
+  const start = friendsPage * FRIENDS_PER_PAGE;
+  for (const s of lastFriendsSnapshot.slice(start, start + FRIENDS_PER_PAGE)) {
+    watchList.append(playerRow(s, { removable: true }));
+  }
+};
+$("friendsNext").onclick = () => {
+  const pages = Math.max(1, Math.ceil(lastFriendsSnapshot.length / FRIENDS_PER_PAGE));
+  if (friendsPage >= pages - 1) return;
+  friendsPage += 1;
+  const watchList = $("watched");
+  watchList.replaceChildren();
+  renderFriendsPager(lastFriendsSnapshot.length);
+  const start = friendsPage * FRIENDS_PER_PAGE;
+  for (const s of lastFriendsSnapshot.slice(start, start + FRIENDS_PER_PAGE)) {
+    watchList.append(playerRow(s, { removable: true }));
+  }
+};
 $("friendsPanel").onclick = (e) => {
   if (e.target === $("friendsPanel")) showFriends(false);
+};
+$("playSessionPanel").onclick = (e) => {
+  if (e.target === $("playSessionPanel")) showPlaySession(false);
 };
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$("friendsPanel").hidden) showFriends(false);
+  else if (!$("playSessionPanel").hidden) showPlaySession(false);
   else if (!$("settingsPanel").hidden) showSettings(false);
 });
 
@@ -530,6 +732,14 @@ $("hideOpponent").onchange = async () => {
 };
 $("blunderAlerts").onchange = async () => {
   settings.blunderAlerts = $("blunderAlerts").checked;
+  await chrome.storage.local.set({ settings });
+};
+$("pictureInPicture").onchange = async () => {
+  settings.pictureInPicture = $("pictureInPicture").checked;
+  await chrome.storage.local.set({ settings });
+};
+$("timeWarning").onchange = async () => {
+  settings.timeWarning = $("timeWarning").checked;
   await chrome.storage.local.set({ settings });
 };
 $("evalBar").onchange = async () => {
@@ -774,6 +984,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     scheduleAutoRefresh();
     renderStatus();
   }
+  if (changes.playSession) renderPlaySession(changes.playSession.newValue);
   if (
     changes.statuses ||
     changes.lastCheck ||

@@ -1,0 +1,82 @@
+#cfn-playsession {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  font: 12px/1.35 "Segoe UI", system-ui, sans-serif;
+  color: #f4f0ea;
+  pointer-events: none;
+}
+
+#cfn-playsession .cfn-ps-card {
+  pointer-events: auto;
+  min-width: 180px;
+  max-width: 240px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(16, 12, 28, 0.88);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px) saturate(1.2);
+}
+
+#cfn-playsession .cfn-ps-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+#cfn-playsession .cfn-ps-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #d8c4f5;
+}
+
+#cfn-playsession .cfn-ps-stop {
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f4f0ea;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#cfn-playsession .cfn-ps-stop:hover {
+  border-color: rgba(192, 132, 252, 0.55);
+  background: rgba(192, 132, 252, 0.18);
+}
+
+#cfn-playsession .cfn-ps-progress {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+#cfn-playsession .cfn-ps-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+#cfn-playsession .cfn-ps-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #a855f7, #c084fc);
+  transition: width 0.35s ease;
+}
+
+#cfn-playsession .cfn-ps-hint {
+  color: #b7a6d6;
+  font-size: 11px;
+}

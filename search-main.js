@@ -8,10 +8,25 @@
     if (typeof data !== "object") return out;
     const row = data.userView || data.user_view || data.user || data;
     if (row && (row.username || row.userName)) out.push(data);
-    for (const key of ["friends", "suggestions", "users", "data", "result", "players"]) {
-      if (data[key]) unpack(data[key], out);
+    const skip = new Set(["pagination", "meta", "error", "status", "pageInfo", "page_info"]);
+    for (const [key, val] of Object.entries(data)) {
+      if (skip.has(key) || val == null || typeof val !== "object") continue;
+      unpack(val, out);
     }
     return out;
+  };
+
+  const nextPageToken = (data) => {
+    if (!data || typeof data !== "object") return "";
+    return String(
+      data.pagination?.nextPageToken ||
+        data.pagination?.next_page_token ||
+        data.nextPageToken ||
+        data.next_page_token ||
+        data.pageToken ||
+        data.page_token ||
+        ""
+    ).trim();
   };
 
   const toUser = (raw) => {
@@ -110,24 +125,108 @@
     return chunks.flat();
   };
 
-  const listFriends = async (me) => {
-    const user = pageUsername(me);
+  const FRIENDS_RPC_MAX_PAGES = 50;
+  const FRIENDS_RPC_PAGE_SIZE = 100;
+  const FRIENDS_HTML_MAX_PAGES = 100;
+
+  const queryFriendsAllPages = async () => {
     const headers = {
       "content-type": "application/json",
       "connect-protocol-version": "1",
       accept: "application/json",
     };
+    const found = new Map();
+    let pageToken = "";
+    let offset = 0;
+    let useOffset = false;
+
+    for (let i = 0; i < FRIENDS_RPC_MAX_PAGES; i++) {
+      const pagination = {
+        pageSize: FRIENDS_RPC_PAGE_SIZE,
+        page_size: FRIENDS_RPC_PAGE_SIZE,
+      };
+      if (pageToken) {
+        pagination.pageToken = pageToken;
+        pagination.page_token = pageToken;
+      } else if (useOffset && offset > 0) {
+        pagination.skip = offset;
+        pagination.offset = offset;
+        pagination.page = Math.floor(offset / FRIENDS_RPC_PAGE_SIZE) + 1;
+      }
+
+      let users = [];
+      let token = "";
+      try {
+        const res = await fetch("/service/friends-search/chesscom.friends_search.v1.FriendsSearch/QueryFriends", {
+          method: "POST",
+          credentials: "include",
+          headers,
+          body: JSON.stringify({
+            includePresenceStatus: false,
+            include_presence_status: false,
+            pagination,
+            query: { query: {} },
+          }),
+        });
+        if (!res.ok) break;
+        const raw = await res.json();
+        users = unpack(raw).map(toUser).filter((u) => u.username);
+        token = nextPageToken(raw);
+      } catch {
+        break;
+      }
+
+      const before = found.size;
+      for (const u of users) found.set(String(u.username).toLowerCase(), u);
+      if (found.size === before) break;
+
+      if (token && token !== pageToken) {
+        pageToken = token;
+        useOffset = false;
+        continue;
+      }
+      if (users.length < FRIENDS_RPC_PAGE_SIZE) break;
+
+      useOffset = true;
+      pageToken = "";
+      offset += users.length;
+    }
+
+    return [...found.values()];
+  };
+
+  const scrapeFriendsHtml = async (user) => {
+    const names = new Map();
+    const me = String(user || "").toLowerCase();
+    const maxPages = user ? FRIENDS_HTML_MAX_PAGES : 1;
+    for (let page = 1; page <= maxPages; page++) {
+      try {
+        const path = user
+          ? `/member/${encodeURIComponent(user)}/friends${page > 1 ? `?page=${page}` : ""}`
+          : "/friends";
+        const res = await fetch(path, { credentials: "include" });
+        if (!res.ok) break;
+        const html = await res.text();
+        const before = names.size;
+        const re = /\/member\/([A-Za-z0-9_-]+)/gi;
+        let m;
+        while ((m = re.exec(html))) {
+          if (!m[1] || m[1].toLowerCase() === me) continue;
+          const key = m[1].toLowerCase();
+          if (!names.has(key)) names.set(key, { username: m[1], avatar: "", title: "", name: "" });
+        }
+        if (names.size === before) break;
+        if (!user) break;
+      } catch {
+        break;
+      }
+    }
+    return [...names.values()];
+  };
+
+  const listFriends = async (me) => {
+    const user = pageUsername(me);
     const reqs = [
-      fetch("/service/friends-search/chesscom.friends_search.v1.FriendsSearch/QueryFriends", {
-        method: "POST",
-        credentials: "include",
-        headers,
-        body: JSON.stringify({
-          includePresenceStatus: false,
-          pagination: { pageSize: 200 },
-          query: { query: {} },
-        }),
-      }),
       fetch("/callback/friends/all", {
         credentials: "include",
         headers: { Accept: "application/json" },
@@ -141,26 +240,17 @@
         })
       );
     }
-    const chunks = await Promise.all(reqs.map(pull));
-    const users = chunks.flat();
-    if (users.length) return users;
+    const [callbackUsers, rpcUsers, htmlUsers] = await Promise.all([
+      Promise.all(reqs.map(pull)).then((chunks) => chunks.flat()),
+      queryFriendsAllPages().catch(() => []),
+      scrapeFriendsHtml(user).catch(() => []),
+    ]);
 
-    try {
-      const res = await fetch(user ? `/member/${encodeURIComponent(user)}/friends` : "/friends", {
-        credentials: "include",
-      });
-      if (!res.ok) return [];
-      const html = await res.text();
-      const names = new Set();
-      const re = /\/member\/([A-Za-z0-9_-]+)/gi;
-      let m;
-      while ((m = re.exec(html))) {
-        if (m[1] && m[1].toLowerCase() !== String(user || "").toLowerCase()) names.add(m[1]);
-      }
-      return [...names].map((username) => ({ username, avatar: "", title: "", name: "" }));
-    } catch {
-      return [];
+    const found = new Map();
+    for (const u of [...callbackUsers, ...rpcUsers, ...htmlUsers]) {
+      if (u?.username) found.set(String(u.username).toLowerCase(), u);
     }
+    return [...found.values()];
   };
 
   const deepQueryAll = (selector, root = document) => {

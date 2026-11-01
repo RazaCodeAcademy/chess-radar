@@ -232,6 +232,90 @@ h1 { font-size: 15px; line-height: 1.2; margin: 0; font-weight: 700; color: #f6f
 }
 .theory-btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
 
+.play-session-ico { background: rgba(34, 197, 94, 0.2); color: #86efac; }
+.play-session-badge {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+  font-size: 11px;
+  font-weight: 700;
+}
+.play-session-body {
+  padding: 4px 12px 14px;
+}
+.play-session {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.play-session-modes {
+  margin-bottom: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+.play-session-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.play-session-goal input,
+.play-session-queue select {
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid #4a4744;
+  border-radius: 10px;
+  background: #1a1714;
+  color: inherit;
+}
+.play-session-start,
+.play-session-stop {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.play-session-start {
+  border: 1px solid rgba(243, 232, 255, 0.35);
+  background: linear-gradient(180deg, #7c3aed 0%, #5b21b6 100%);
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(124, 58, 237, 0.28);
+}
+.play-session-start:hover { filter: brightness(1.06); }
+.play-session-start:disabled { opacity: 0.55; cursor: default; filter: none; }
+.play-session-stop {
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+}
+.play-session-stop:hover { border-color: #c084fc; background: rgba(192, 132, 252, 0.14); }
+.play-session-progress { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+.play-session-bar {
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.play-session-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #a855f7, #c084fc);
+  transition: width 0.3s ease;
+}
+.play-session-hint { margin: 0; color: #a7a39d; font-size: 12px; line-height: 1.35; }
+#psError { margin: 8px 0 0; }
+
 .steps {
   margin: 0 0 14px;
   padding: 0;
@@ -290,6 +374,16 @@ h1 { font-size: 15px; line-height: 1.2; margin: 0; font-weight: 700; color: #f6f
   border-radius: 16px;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   overflow: hidden;
+}
+#playSessionPanel {
+  align-items: flex-start;
+}
+#playSessionPanel .friends-card.play-session-card {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
 }
 .friends-head {
   display: flex;
@@ -406,7 +500,38 @@ select { width: auto; }
   flex: 1;
   min-height: 0;
   margin: 4px 0 0;
-  padding: 0 8px 10px;
+  padding: 0 8px 6px;
+}
+.friends-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 8px 12px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.pager-btn {
+  min-width: 64px;
+  padding: 6px 10px;
+  border: 1px solid #4a4744;
+  border-radius: 8px;
+  background: #32302c;
+  color: #eee;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pager-btn:hover:not(:disabled) { background: #3e3b37; }
+.pager-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.pager-label {
+  color: #a7a39d;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 .people > li {
   display: grid;

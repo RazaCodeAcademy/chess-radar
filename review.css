@@ -14,34 +14,6 @@
   font: inherit;
   cursor: pointer;
 }
-#cfn-review .cfn-rv-launch {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border: 0;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #9333ea 0%, #5b21b6 100%);
-  color: #ffffff;
-  font-weight: 700;
-  box-shadow: 0 8px 18px rgba(124, 58, 237, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.45);
-  transition: transform 0.1s ease, filter 0.15s ease;
-}
-#cfn-review .cfn-rv-launch:hover {
-  filter: brightness(1.08);
-}
-#cfn-review .cfn-rv-launch:active {
-  transform: translateY(1px);
-  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
-}
-#cfn-review .cfn-rv-launch svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.4;
-  stroke-linecap: round;
-}
 #cfn-review .cfn-rv-panel {
   width: min(520px, calc(100vw - 32px));
   max-height: min(640px, calc(100vh - 32px));

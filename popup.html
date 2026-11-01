@@ -41,6 +41,22 @@
       <p id="session" class="session"></p>
     </section>
 
+    <button id="openPlaySession" class="friends-btn" type="button" aria-haspopup="dialog" aria-expanded="false">
+      <span class="friends-ico play-session-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path fill="currentColor" d="M4 3h2v18H4Zm3 0h7l-1.2 3L15 9H7Zm9.5 7.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Zm0 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/>
+        </svg>
+      </span>
+      <span class="friends-copy">
+        <span class="friends-title">Play Session</span>
+        <span id="playSessionSummary" class="friends-summary">Set a goal, then auto-queue until you hit it</span>
+      </span>
+      <span id="playSessionBadge" class="play-session-badge" hidden>Active</span>
+      <svg class="chevron" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" d="M9.3 6.3 14.9 12l-5.6 5.7 1.4 1.4L17.8 12 10.7 4.9Z"/>
+      </svg>
+    </button>
+
     <button id="openFriends" class="friends-btn" type="button" aria-haspopup="dialog" aria-expanded="false">
       <span class="friends-ico" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="18" height="18">
@@ -153,6 +169,20 @@
       </label>
       <label class="switch-row">
         <span>
+          <span class="switch-label">Picture-in-Picture</span>
+          <span class="field-hint">Float the live board so you can watch or play while browsing other tabs</span>
+        </span>
+        <input id="pictureInPicture" type="checkbox" class="switch" />
+      </label>
+      <label class="switch-row">
+        <span>
+          <span class="switch-label">Visual Time Warning</span>
+          <span class="field-hint">Glowing board border — green when you’re up on time, red when you’re down</span>
+        </span>
+        <input id="timeWarning" type="checkbox" class="switch" />
+      </label>
+      <label class="switch-row">
+        <span>
           <span class="switch-label">Follow next game</span>
           <span class="field-hint">When a watched game ends, open their next game in the same tab</span>
         </span>
@@ -211,6 +241,48 @@
     </div>
   </footer>
 
+  <div id="playSessionPanel" class="friends-pop" hidden>
+    <div class="friends-card play-session-card" role="dialog" aria-modal="true" aria-labelledby="playSessionTitle">
+      <div class="friends-head">
+        <div>
+          <h2 id="playSessionTitle">Play Session</h2>
+          <p class="hint">Set a goal, then auto-queue until you hit it.</p>
+        </div>
+        <button id="closePlaySession" class="back-btn" type="button">Close</button>
+      </div>
+      <div class="play-session-body">
+        <div id="playSessionSetup" class="play-session">
+          <div class="chip-group play-session-modes" role="group" aria-label="Session goal type">
+            <label class="chip-toggle"><input type="radio" name="psMode" value="games" checked /><span>Games</span></label>
+            <label class="chip-toggle"><input type="radio" name="psMode" value="minutes" /><span>Minutes</span></label>
+          </div>
+          <div class="play-session-row">
+            <label class="field play-session-goal">
+              <span class="field-label" id="psGoalLabel">Games</span>
+              <input id="psGoal" type="number" min="1" max="100" value="5" />
+            </label>
+            <label class="field play-session-queue">
+              <span class="field-label">Queue</span>
+              <select id="psQueue">
+                <option value="new">New Game</option>
+                <option value="rematch">Rematch</option>
+              </select>
+            </label>
+          </div>
+          <button id="psStart" class="play-session-start" type="button">Start session</button>
+          <p id="psError" class="error" hidden></p>
+        </div>
+
+        <div id="playSessionActive" class="play-session" hidden>
+          <div id="psProgress" class="play-session-progress">0 / 5 games</div>
+          <div class="play-session-bar"><span id="psFill" class="play-session-fill"></span></div>
+          <p id="psActiveHint" class="play-session-hint">Auto-queuing on Chess.com after each game.</p>
+          <button id="psStop" class="play-session-stop" type="button">Stop session</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="friendsPanel" class="friends-pop" hidden>
     <div class="friends-card" role="dialog" aria-modal="true" aria-labelledby="friendsTitle">
       <div class="friends-head">
@@ -229,6 +301,11 @@
       </div>
       <p id="addError" class="error"></p>
       <ul id="watched" class="people"></ul>
+      <div id="friendsPager" class="friends-pager" hidden>
+        <button id="friendsPrev" class="pager-btn" type="button" aria-label="Previous friends page">Prev</button>
+        <span id="friendsPageLabel" class="pager-label">1 / 1</span>
+        <button id="friendsNext" class="pager-btn" type="button" aria-label="Next friends page">Next</button>
+      </div>
     </div>
   </div>
 

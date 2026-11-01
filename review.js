@@ -30,11 +30,10 @@
 
   const root = document.createElement("div");
   root.id = "cfn-review";
+  // Filled bars — same SVG style as Chess.com game-icons glyphs.
+  const ANALYZE_PATH = "m5 20h3v-11h-3zm5.5 0h3v-16h-3zm5.5 0h3v-8h-3zm0 0";
+
   root.innerHTML = `
-    <button class="cfn-rv-launch" type="button">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16M7 16V9M12 16V5M17 16v-4"/></svg>
-      Analyze game
-    </button>
     <section class="cfn-rv-panel" hidden>
       <header>
         <span class="cfn-rv-title">Game review</span>
@@ -61,13 +60,45 @@
       </footer>
     </section>`;
   document.documentElement.append(root);
-  const launch = root.querySelector(".cfn-rv-launch");
   const panel = root.querySelector(".cfn-rv-panel");
   const body = root.querySelector(".cfn-rv-body");
   const nav = root.querySelector(".cfn-rv-nav");
   let cursor = 0;
   let playing = false;
   let playTimer = null;
+
+  function openAnalyze() {
+    const game = currentGame();
+    if (!game) return;
+    if (!gameIsFinished(game)) {
+      // Icon stays visible during live games; analysis starts after the game ends.
+      return;
+    }
+    open = true;
+    if (state.status === "idle") runAnalysis();
+    sync();
+  }
+
+  function registerAnalyzeTool() {
+    const game = currentGame();
+    // Show in the control bar during live play and after the game ends.
+    const onBoard =
+      !!game ||
+      /\/(?:game|play\/|analysis\/game)/.test(location.pathname) ||
+      !!document.querySelector("wc-chess-board, chess-board");
+    const visible = !!(settings.analyzeGame && onBoard && !open);
+    window.__cfnTools?.upsert({
+      id: "analyze",
+      label: "Analyze Game",
+      title: "Analyze Game",
+      accent: "analyze",
+      glyph: "chart-bars-analyze",
+      path: ANALYZE_PATH,
+      visible,
+      active: open,
+      onClick: openAnalyze,
+    });
+  }
 
   chrome.storage.local.get("settings").then(({ settings: s = {} }) => {
     settings = { ...settings, ...s };
@@ -162,15 +193,18 @@
   function sync() {
     if (!chrome.runtime?.id) return stop();
     const game = currentGame();
-    if (!settings.analyzeGame || !game || !gameIsFinished(game)) {
+    registerAnalyzeTool();
+    const canOpen = !!(settings.analyzeGame && game && gameIsFinished(game));
+    if (!canOpen) {
       root.style.display = "none";
       if (open) {
         open = false;
         window.__cfnReviewData = null;
+        registerAnalyzeTool();
       }
       return;
     }
-    root.style.display = "block";
+    root.style.display = open ? "block" : "none";
     if (game.key !== gameKey) {
       gameKey = game.key;
       state = { status: "idle" };
@@ -181,7 +215,6 @@
       stopPlay();
       render();
     }
-    launch.hidden = open;
     panel.hidden = !open;
     nav.hidden = !open || state.status !== "done" || !!puzzle;
     publish();
@@ -1533,12 +1566,6 @@
   });
 
   root.addEventListener("click", (e) => {
-    if (e.target.closest(".cfn-rv-launch")) {
-      open = true;
-      if (state.status === "idle") runAnalysis();
-      sync();
-      return;
-    }
     if (e.target.closest(".cfn-rv-close")) {
       open = false;
       sync();
@@ -1640,6 +1667,8 @@
     stopPuzzleWatch();
     clearPuzzleMarks();
     window.__cfnPuzzleActive = false;
+    window.__cfnTools?.remove("analyze");
+    window.__cfnTools?.setPanelOpen(false);
     root.remove();
     window.__cfnReviewData = null;
   }

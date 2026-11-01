@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChessRadar",
-  "version": "1.2.1",
-  "description": "Desktop notification when someone in your Chess.com friend list starts playing, plus an evaluation bar for games you watch.",
+  "version": "1.5.0",
+  "description": "Desktop notification when someone in your Chess.com friend list starts playing, plus eval bar, PiP, visual time warning, and play sessions.",
   "permissions": [
     "alarms",
     "notifications",
@@ -70,6 +70,24 @@
       "matches": ["https://www.chess.com/*"],
       "js": ["evalbar.js"],
       "css": ["evalbar.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.chess.com/*"],
+      "js": ["toolbar.js", "pip.js"],
+      "css": ["toolbar.css", "pip.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.chess.com/*"],
+      "js": ["timewarn.js"],
+      "css": ["timewarn.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.chess.com/*"],
+      "js": ["playsession.js"],
+      "css": ["playsession.css"],
       "run_at": "document_idle"
     },
     {

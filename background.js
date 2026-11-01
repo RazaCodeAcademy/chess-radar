@@ -172,16 +172,106 @@ function scrapeMemberNames(html, me) {
   return [...names];
 }
 
+const FRIENDS_HTML_MAX_PAGES = 100;
+const FRIENDS_RPC_MAX_PAGES = 50;
+const FRIENDS_RPC_PAGE_SIZE = 100;
+
+function extractNextPageToken(data) {
+  if (!data || typeof data !== "object") return "";
+  const token =
+    data.pagination?.nextPageToken ||
+    data.pagination?.next_page_token ||
+    data.nextPageToken ||
+    data.next_page_token ||
+    data.pageToken ||
+    data.page_token ||
+    "";
+  return String(token || "").trim();
+}
+
+async function fetchSearchPage(url, opts) {
+  try {
+    const res = await fetch(url, { credentials: "include", ...opts });
+    if (!res.ok) return { users: [], nextToken: "" };
+    const raw = await res.json();
+    return {
+      users: collectSearchHits(raw).map(toSearchUser).filter((u) => u.username),
+      nextToken: extractNextPageToken(raw),
+    };
+  } catch {
+    return { users: [], nextToken: "" };
+  }
+}
+
+async function queryFriendsAllPages() {
+  const url = `${BASE}/service/friends-search/chesscom.friends_search.v1.FriendsSearch/QueryFriends`;
+  const headers = {
+    "content-type": "application/json",
+    "connect-protocol-version": "1",
+    accept: "application/json",
+  };
+  const found = new Map();
+  let pageToken = "";
+  let offset = 0;
+  let useOffset = false;
+
+  for (let i = 0; i < FRIENDS_RPC_MAX_PAGES; i++) {
+    const pagination = {
+      pageSize: FRIENDS_RPC_PAGE_SIZE,
+      page_size: FRIENDS_RPC_PAGE_SIZE,
+    };
+    if (pageToken) {
+      pagination.pageToken = pageToken;
+      pagination.page_token = pageToken;
+    } else if (useOffset && offset > 0) {
+      pagination.skip = offset;
+      pagination.offset = offset;
+      pagination.page = Math.floor(offset / FRIENDS_RPC_PAGE_SIZE) + 1;
+    }
+
+    const { users, nextToken } = await fetchSearchPage(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        includePresenceStatus: false,
+        include_presence_status: false,
+        pagination,
+        query: { query: {} },
+      }),
+    });
+
+    const before = found.size;
+    for (const u of users) {
+      if (u.username) found.set(norm(u.username), u.username);
+    }
+    if (found.size === before) break;
+
+    if (nextToken && nextToken !== pageToken) {
+      pageToken = nextToken;
+      useOffset = false;
+      continue;
+    }
+
+    if (users.length < FRIENDS_RPC_PAGE_SIZE) break;
+
+    useOffset = true;
+    pageToken = "";
+    offset += users.length;
+  }
+
+  return [...found.values()];
+}
+
 async function friendsFromTab(tabId, me) {
   if (tabId == null) return [];
   try {
-    const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: "cfnPageFriends", me }), 6000);
+    const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: "cfnPageFriends", me }), 45000);
     return res?.users || [];
   } catch {
     try {
       await chrome.scripting.executeScript({ target: { tabId }, files: ["search-main.js"], world: "MAIN" });
       await chrome.scripting.executeScript({ target: { tabId }, files: ["search-bridge.js"] });
-      const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: "cfnPageFriends", me }), 6000);
+      const res = await withTimeout(chrome.tabs.sendMessage(tabId, { type: "cfnPageFriends", me }), 45000);
       return res?.users || [];
     } catch {
       return [];
@@ -204,6 +294,30 @@ async function setFriendsStatus({ count, ok, hint, needsTab = false }) {
   });
 }
 
+async function scrapeAllFriendsHtml(username, me) {
+  const names = [];
+  if (!username) return names;
+  const seen = new Set();
+  for (let page = 1; page <= FRIENDS_HTML_MAX_PAGES; page++) {
+    try {
+      const url = `${BASE}/member/${encodeURIComponent(username)}/friends${page > 1 ? `?page=${page}` : ""}`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) break;
+      const before = seen.size;
+      for (const name of scrapeMemberNames(await res.text(), me)) {
+        const key = norm(name);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        names.push(name);
+      }
+      if (seen.size === before) break;
+    } catch {
+      break;
+    }
+  }
+  return names;
+}
+
 async function collectChesscomFriends(username) {
   const me = norm(username);
   const found = new Set();
@@ -212,43 +326,23 @@ async function collectChesscomFriends(username) {
     if (n && norm(n) !== me) found.add(n);
   };
 
-  const pageHits = await friendsFromOpenTab(username).catch(() => []);
-  for (const u of pageHits) add(u.username || u);
-
-  const rpcBody = {
-    includePresenceStatus: false,
-    pagination: { pageSize: 200 },
-    query: { query: {} },
-  };
   const jsonUrls = [
     `${BASE}/callback/friends/all`,
     username ? `${BASE}/callback/friends/${encodeURIComponent(username)}` : null,
     username ? `${BASE}/callback/user/${encodeURIComponent(username)}/friends` : null,
   ].filter(Boolean);
-  const chunks = await Promise.all([
-    ...jsonUrls.map((url) => fetchSearchJson(url, { headers: { Accept: "application/json" } })),
-    fetchSearchJson(`${BASE}/service/friends-search/chesscom.friends_search.v1.FriendsSearch/QueryFriends`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "connect-protocol-version": "1", accept: "application/json" },
-      body: JSON.stringify(rpcBody),
-    }),
-  ]);
-  for (const u of chunks.flat()) add(u.username);
 
-  if (username) {
-    for (let page = 1; page <= 6; page++) {
-      try {
-        const url = `${BASE}/member/${encodeURIComponent(username)}/friends${page > 1 ? `?page=${page}` : ""}`;
-        const res = await fetch(url, { credentials: "include" });
-        if (!res.ok) break;
-        const before = found.size;
-        scrapeMemberNames(await res.text(), me).forEach(add);
-        if (found.size === before) break;
-      } catch {
-        break;
-      }
-    }
-  }
+  // Pull every source in parallel: page bridge, callback JSON, QueryFriends pages, HTML pages.
+  const [pageHits, callbackChunks, rpcNames, htmlNames] = await Promise.all([
+    friendsFromOpenTab(username).catch(() => []),
+    Promise.all(jsonUrls.map((url) => fetchSearchJson(url, { headers: { Accept: "application/json" } }))),
+    queryFriendsAllPages().catch(() => []),
+    scrapeAllFriendsHtml(username, me).catch(() => []),
+  ]);
+  for (const u of pageHits) add(u.username || u);
+  for (const u of callbackChunks.flat()) add(u.username);
+  for (const name of rpcNames) add(name);
+  for (const name of htmlNames) add(name);
 
   // A Chess.com tab can supply the friend list. Never open one from Refresh.
   let needsTab = false;
@@ -1261,11 +1355,22 @@ async function injectIntoOpenTabs() {
   const tabs = await chrome.tabs.query({ url: "https://www.chess.com/*" });
   for (const tab of tabs) {
     try {
-      await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["evalbar.css", "review.css"] });
+      await chrome.scripting.insertCSS({
+        target: { tabId: tab.id },
+        files: ["evalbar.css", "toolbar.css", "pip.css", "timewarn.css", "review.css"],
+      });
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["search-main.js"], world: "MAIN" });
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        files: ["search-bridge.js", "watch-recover.js", "evalbar.js", "review.js"],
+        files: [
+          "search-bridge.js",
+          "watch-recover.js",
+          "evalbar.js",
+          "toolbar.js",
+          "pip.js",
+          "timewarn.js",
+          "review.js",
+        ],
       });
     } catch {
       // tab not scriptable (e.g. still loading or discarded)
@@ -1322,8 +1427,10 @@ function collectSearchHits(data, out = []) {
   if (typeof data !== "object") return out;
   const row = data.userView || data.user_view || data.user || data;
   if (row && (row.username || row.userName)) out.push(data);
-  for (const key of ["friends", "suggestions", "users", "data", "result", "players"]) {
-    if (data[key]) collectSearchHits(data[key], out);
+  const skip = new Set(["pagination", "meta", "error", "status", "pageInfo", "page_info"]);
+  for (const [key, val] of Object.entries(data)) {
+    if (skip.has(key) || val == null || typeof val !== "object") continue;
+    collectSearchHits(val, out);
   }
   return out;
 }
@@ -1725,6 +1832,113 @@ const handlers = {
       return { ok: true };
     }
     return { ok: false };
+  },
+  async playSessionStart(msg) {
+    const mode = msg.mode === "minutes" ? "minutes" : "games";
+    const goal = Math.max(1, Math.min(mode === "minutes" ? 180 : 100, Number(msg.goal) || 1));
+    const queueTarget = msg.queueTarget === "rematch" ? "rematch" : "new";
+    const playSession = {
+      active: true,
+      mode,
+      goal,
+      queueTarget,
+      gamesDone: 0,
+      countedIds: [],
+      startedAt: Date.now(),
+      completedAt: null,
+      completeReason: "",
+    };
+    await chrome.storage.local.set({ playSession });
+
+    const open = await chrome.tabs.query({ url: "https://www.chess.com/*" });
+    const playTab =
+      open.find((t) => /\/play\//.test(t.url || "") && t.id != null) ||
+      open.find((t) => t.id != null && !t.discarded);
+    if (playTab?.id != null) {
+      await chrome.tabs.update(playTab.id, { active: true });
+      if (playTab.windowId != null) await chrome.windows.update(playTab.windowId, { focused: true });
+    } else {
+      await chrome.tabs.create({ url: `${BASE}/play/online` });
+    }
+
+    return { ok: true, session: playSession };
+  },
+  async playSessionStop() {
+    const { playSession } = await chrome.storage.local.get("playSession");
+    if (!playSession) return { ok: true, session: null };
+    const stopped = {
+      ...playSession,
+      active: false,
+      completedAt: playSession.completedAt || Date.now(),
+      completeReason: playSession.completeReason || "stopped",
+    };
+    await chrome.storage.local.set({ playSession: stopped });
+    return { ok: true, session: stopped };
+  },
+  async playSessionGet() {
+    const { playSession = null } = await chrome.storage.local.get("playSession");
+    return { ok: true, session: playSession };
+  },
+  async playSessionRecordGame(msg) {
+    const gameId = String(msg.gameId || "");
+    const { playSession } = await chrome.storage.local.get("playSession");
+    if (!playSession?.active || !gameId) return { ok: true, session: playSession || null };
+
+    const countedIds = Array.isArray(playSession.countedIds) ? [...playSession.countedIds] : [];
+    if (countedIds.includes(gameId)) return { ok: true, session: playSession };
+
+    countedIds.push(gameId);
+    let next = {
+      ...playSession,
+      countedIds: countedIds.slice(-200),
+      gamesDone: (Number(playSession.gamesDone) || 0) + 1,
+    };
+
+    const timeUp =
+      next.mode === "minutes" && Date.now() - (next.startedAt || 0) >= Number(next.goal || 0) * 60_000;
+    const gamesUp = next.mode === "games" && next.gamesDone >= Number(next.goal || 0);
+    if (timeUp || gamesUp) {
+      next = {
+        ...next,
+        active: false,
+        completedAt: Date.now(),
+        completeReason: timeUp ? "time" : "games",
+      };
+      await notify(
+        { username: "chessradar" },
+        "Play session complete",
+        timeUp
+          ? `Time's up — you played ${next.gamesDone} game${next.gamesDone === 1 ? "" : "s"}.`
+          : `You hit your goal of ${next.goal} game${next.goal === 1 ? "" : "s"}.`,
+        `${BASE}/play/online`,
+        { force: true }
+      );
+    }
+
+    await chrome.storage.local.set({ playSession: next });
+    return { ok: true, session: next };
+  },
+  async playSessionComplete(msg) {
+    const { playSession } = await chrome.storage.local.get("playSession");
+    if (!playSession?.active) return { ok: true, session: playSession || null };
+    const reason = msg.reason === "time" ? "time" : "games";
+    const next = {
+      ...playSession,
+      active: false,
+      completedAt: Date.now(),
+      completeReason: reason,
+    };
+    await chrome.storage.local.set({ playSession: next });
+    await notify(
+      { username: "chessradar" },
+      "Play session complete",
+      reason === "time"
+        ? `Time's up — you played ${next.gamesDone || 0} game${(next.gamesDone || 0) === 1 ? "" : "s"}.`
+        : `You hit your goal of ${next.goal} game${next.goal === 1 ? "" : "s"}.`,
+      `${BASE}/play/online`,
+      { force: true }
+    );
+    return { ok: true, session: next };
   },
 };
 
