@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const send = (type) => chrome.runtime.sendMessage({ type });
 
 let settings = {};
-const FRIENDS_PER_PAGE = 10;
+const FRIENDS_PER_PAGE = 5;
 let friendsPage = 0;
 let lastFriendsSnapshot = [];
 

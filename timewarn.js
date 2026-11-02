@@ -1,20 +1,26 @@
 // Visual Time Warning: glowing board border when you're up or down on the clock.
+// Uses position:fixed against the viewport so it still shows in Focus / Theatre mode
+// and inside Document PiP.
 (() => {
   window.__cfnTimeWarnStop?.();
-  document.querySelectorAll("#cfn-timewarn").forEach((el) => el.remove());
+  for (const d of [document]) {
+    d.querySelectorAll("#cfn-timewarn").forEach((el) => el.remove());
+  }
+  try {
+    window.documentPictureInPicture?.window?.document
+      ?.querySelectorAll?.("#cfn-timewarn")
+      ?.forEach((el) => el.remove());
+  } catch {
+    // ignore
+  }
 
-  const PIECE_RE = /\b([wb])([pnbrqk])\b/;
-  const SQUARE_RE = /\bsquare-(\d)(\d)\b/;
-  const EVEN_MS = 1500; // treat within 1.5s as even
+  const EVEN_MS = 1500;
   const URGENT_MS = 10000;
 
   let settings = { username: "", timeWarning: true };
   let raf = 0;
-
-  const ring = document.createElement("div");
-  ring.id = "cfn-timewarn";
-  ring.setAttribute("aria-hidden", "true");
-  document.documentElement.append(ring);
+  let ring = null;
+  let ringDoc = null;
 
   chrome.storage.local.get("settings").then(({ settings: s = {} }) => {
     settings = { ...settings, ...s };
@@ -27,28 +33,97 @@
 
   const norm = (s) => String(s || "").trim().toLowerCase();
 
-  function onGamePage() {
-    return /\/(?:game|play\/)/.test(location.pathname) || !!document.querySelector("wc-chess-board, chess-board");
+  function docs() {
+    const out = [document];
+    try {
+      const w = window.documentPictureInPicture?.window;
+      if (w && !w.closed && w.document) out.push(w.document);
+    } catch {
+      // ignore
+    }
+    return out;
   }
 
-  function playerName(side) {
-    const root = document.querySelector(`#board-layout-player-${side}`);
+  function onGamePage() {
+    return (
+      /\/(?:game|play\/)/.test(location.pathname) ||
+      docs().some((d) => d.querySelector("wc-chess-board, chess-board, #board-layout-chessboard, .board"))
+    );
+  }
+
+  function findBoard(doc) {
+    return (
+      doc.querySelector("wc-chess-board.board, chess-board.board, wc-chess-board, chess-board") ||
+      doc.querySelector("#board-layout-chessboard .board, #board-layout-chessboard") ||
+      doc.querySelector(".board") ||
+      null
+    );
+  }
+
+  function activeBoard() {
+    // Prefer the PiP board when PiP is open.
+    const list = docs();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const d = list[i];
+      const b = findBoard(d);
+      if (b?.isConnected) {
+        const r = b.getBoundingClientRect();
+        if (r.width > 40 && r.height > 40) return { board: b, doc: d };
+      }
+    }
+    return null;
+  }
+
+  function playerRoot(doc, side) {
+    return (
+      doc.getElementById(`board-layout-player-${side}`) ||
+      doc.querySelector(`#board-layout-player-${side}`) ||
+      doc.querySelector(`[class*="player-${side}"]`) ||
+      doc.querySelector(`#player-${side}`)
+    );
+  }
+
+  function playerName(doc, side) {
+    const root = playerRoot(doc, side);
     if (!root) return "";
     const el =
       root.querySelector(".cc-user-username-component, [data-test-element='user-tagline-username']") ||
-      root.querySelector("a[href*='/member/']");
+      root.querySelector("a[href*='/member/']") ||
+      root.querySelector("[class*='username']");
     const href = el?.getAttribute?.("href") || "";
     const fromHref = href.match(/\/member\/([^/?#]+)/)?.[1];
     return norm(fromHref || el?.textContent);
   }
 
-  function clockText(side) {
-    const root = document.querySelector(`#board-layout-player-${side}`);
-    if (!root) return "";
-    const el =
-      root.querySelector(".clock-time-monospace, [class*='clock-time'], .clock-component, [class*='clock']") ||
-      root.querySelector("[data-cy='clock'], [data-clock]");
-    return (el?.textContent || "").replace(/\s+/g, " ").trim();
+  function clockText(doc, side) {
+    const root = playerRoot(doc, side);
+    const scopes = [root, doc].filter(Boolean);
+    for (const scope of scopes) {
+      const el =
+        scope.querySelector?.(`#board-layout-player-${side} .clock-time-monospace`) ||
+        (scope === root &&
+          (root.querySelector(".clock-time-monospace") ||
+            root.querySelector("[class*='clock-time']") ||
+            root.querySelector(".clock-component") ||
+            root.querySelector("[class*='clock']"))) ||
+        null;
+      const text = (el?.textContent || "").replace(/\s+/g, " ").trim();
+      if (text && /\d:\d/.test(text)) return text;
+    }
+    // Focus mode sometimes keeps clocks near the board without the usual wrappers.
+    const clocks = [...doc.querySelectorAll(".clock-time-monospace, [class*='clock-time']")];
+    if (clocks.length >= 2) {
+      const top = playerRoot(doc, "top");
+      const bottom = playerRoot(doc, "bottom");
+      const pick = side === "top" ? clocks[0] : clocks[clocks.length - 1];
+      // Prefer clock that lives under the matching player root when possible.
+      for (const c of clocks) {
+        if (side === "top" && top?.contains(c)) return c.textContent.replace(/\s+/g, " ").trim();
+        if (side === "bottom" && bottom?.contains(c)) return c.textContent.replace(/\s+/g, " ").trim();
+      }
+      return (pick.textContent || "").replace(/\s+/g, " ").trim();
+    }
+    return "";
   }
 
   function parseClockMs(text) {
@@ -71,68 +146,84 @@
     const [secStr, frac = "0"] = rest.split(".");
     const sec = Number(secStr) || 0;
     const ms = Math.round(Number(`0.${frac.slice(0, 3).padEnd(3, "0")}`) * 1000) || 0;
-    return ((h * 3600 + m * 60 + sec) * 1000) + ms;
+    return (h * 3600 + m * 60 + sec) * 1000 + ms;
   }
 
-  function isFlipped() {
-    const first = document.querySelector("svg.coordinates text");
-    return first?.textContent.trim() === "1";
-  }
-
-  function boardRect() {
-    const pieces = [];
-    for (const el of document.querySelectorAll(".piece")) {
-      const cls = el.className;
-      if (typeof cls !== "string" || cls.includes("dragging")) continue;
-      const p = cls.match(PIECE_RE);
-      const sq = cls.match(SQUARE_RE);
-      if (p && sq) pieces.push({ key: `${sq[1]}${sq[2]}`, el });
+  function pageUsername() {
+    try {
+      const fromWin =
+        window.chesscom?.user?.username ||
+        window.chesscom?.username ||
+        window.chesscom?.context?.user?.username;
+      if (fromWin) return norm(fromWin);
+    } catch {
+      // isolated world may not see page globals
     }
-    if (pieces.length) {
-      const { key, el } = pieces[0];
-      const r = el.getBoundingClientRect();
-      if (r.width) {
-        const flipped = isFlipped();
-        const file = Number(key[0]);
-        const rank = Number(key[1]);
-        const size = r.width;
-        return {
-          left: r.left - (flipped ? 8 - file : file - 1) * size,
-          top: r.top - (flipped ? rank - 1 : 8 - rank) * size,
-          size: size * 8,
-        };
-      }
-    }
-    const host =
-      document.querySelector("wc-chess-board, chess-board") ||
-      document.getElementById("board-layout-chessboard");
-    const r = host?.getBoundingClientRect();
-    if (!r?.width) return null;
-    const size = Math.min(r.width, r.height);
-    return { left: r.left + (r.width - size) / 2, top: r.top + (r.height - size) / 2, size };
-  }
-
-  function mySide(me) {
-    if (!me) return "";
-    if (playerName("bottom") === me) return "bottom";
-    if (playerName("top") === me) return "top";
+    const el = document.querySelector("[data-username], [data-user-username], a.user-username-component");
+    const attr = el?.getAttribute?.("data-username") || el?.getAttribute?.("data-user-username");
+    if (attr) return norm(attr);
     return "";
   }
 
+  function mySide(doc, me) {
+    if (!me) return "";
+    if (playerName(doc, "bottom") === me) return "bottom";
+    if (playerName(doc, "top") === me) return "top";
+    return "";
+  }
+
+  function boardRect(board) {
+    // Prefer the visible piece layer / board face if present.
+    const face =
+      board.querySelector?.(".board, [class*='board-graph']") ||
+      (board.classList?.contains("board") ? board : null) ||
+      board;
+    const r = face.getBoundingClientRect();
+    if (!r?.width || !r?.height) return null;
+    const size = Math.min(r.width, r.height);
+    // If the element is already square-ish, use it directly.
+    if (Math.abs(r.width - r.height) < 4) {
+      return { left: r.left, top: r.top, size: r.width };
+    }
+    return {
+      left: r.left + (r.width - size) / 2,
+      top: r.top + (r.height - size) / 2,
+      size,
+    };
+  }
+
+  function ensureRing(doc) {
+    if (!ring || ringDoc !== doc || !ring.isConnected) {
+      ring?.remove?.();
+      ring = doc.createElement("div");
+      ring.id = "cfn-timewarn";
+      ring.setAttribute("aria-hidden", "true");
+      ringDoc = doc;
+      (doc.body || doc.documentElement).append(ring);
+    } else if (ring.parentElement !== doc.body && ring.parentElement !== doc.documentElement) {
+      (doc.body || doc.documentElement).append(ring);
+    }
+    return ring;
+  }
+
   function hide() {
+    if (!ring) return;
     ring.className = "";
     ring.style.display = "none";
   }
 
-  function paint(rect, mode, urgent) {
-    Object.assign(ring.style, {
+  function paint(el, rect, mode, urgent) {
+    Object.assign(el.style, {
       display: "block",
-      left: `${rect.left - 4}px`,
-      top: `${rect.top - 4}px`,
-      width: `${rect.size + 8}px`,
-      height: `${rect.size + 8}px`,
+      position: "fixed",
+      left: `${Math.round(rect.left) - 5}px`,
+      top: `${Math.round(rect.top) - 5}px`,
+      width: `${Math.round(rect.size) + 10}px`,
+      height: `${Math.round(rect.size) + 10}px`,
+      zIndex: "2147483000",
+      pointerEvents: "none",
     });
-    ring.className = `is-on is-${mode}${urgent ? " is-urgent" : ""}`;
+    el.className = `is-on is-${mode}${urgent ? " is-urgent" : ""}`;
   }
 
   function tick() {
@@ -140,21 +231,28 @@
       hide();
       return;
     }
-    const me = norm(settings.username);
+    const me = norm(settings.username) || pageUsername();
     if (!me) {
       hide();
       return;
     }
-    const side = mySide(me);
-    if (!side) {
-      // Only in your own games.
+
+    const found = activeBoard();
+    if (!found) {
       hide();
       return;
     }
+    const { board, doc } = found;
+    const side = mySide(doc, me);
+    if (!side) {
+      hide();
+      return;
+    }
+
     const opp = side === "bottom" ? "top" : "bottom";
-    const mine = parseClockMs(clockText(side));
-    const theirs = parseClockMs(clockText(opp));
-    const rect = boardRect();
+    const mine = parseClockMs(clockText(doc, side));
+    const theirs = parseClockMs(clockText(doc, opp));
+    const rect = boardRect(board);
     if (mine == null || theirs == null || !rect) {
       hide();
       return;
@@ -165,7 +263,8 @@
     if (diff > EVEN_MS) mode = "up";
     else if (diff < -EVEN_MS) mode = "down";
     const urgent = mine <= URGENT_MS || (mode === "down" && Math.abs(diff) >= 15000);
-    paint(rect, mode, urgent);
+
+    paint(ensureRing(doc), rect, mode, urgent);
   }
 
   function loop() {
@@ -176,11 +275,41 @@
   loop();
   window.addEventListener("resize", tick);
   window.addEventListener("scroll", tick, true);
+  document.addEventListener("fullscreenchange", tick);
+  try {
+    window.documentPictureInPicture?.addEventListener?.("enter", () => setTimeout(tick, 200));
+  } catch {
+    // ignore
+  }
+
+  // Focus / theatre mode toggles often change layout classes on the root.
+  let moTimer = 0;
+  let mo = null;
+  try {
+    mo = new MutationObserver(() => {
+      clearTimeout(moTimer);
+      moTimer = setTimeout(tick, 50);
+    });
+    mo.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
+    mo.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
+  } catch {
+    mo = null;
+  }
 
   window.__cfnTimeWarnStop = () => {
     clearTimeout(raf);
+    clearTimeout(moTimer);
+    mo?.disconnect?.();
     hide();
-    ring.remove();
+    ring?.remove?.();
+    ring = null;
+    ringDoc = null;
     delete window.__cfnTimeWarnStop;
   };
 })();

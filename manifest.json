@@ -74,6 +74,12 @@
     },
     {
       "matches": ["https://www.chess.com/*"],
+      "js": ["pip-main.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.chess.com/*"],
       "js": ["toolbar.js", "pip.js"],
       "css": ["toolbar.css", "pip.css"],
       "run_at": "document_idle"
