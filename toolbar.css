@@ -5,8 +5,89 @@
  * </button>
  * Keep overrides minimal so Chess.com CSS wins.
  */
-.cfn-tool {
-  flex: none;
+.cfn-tools-slot {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  overflow: visible;
+}
+.cfn-tools-slot.is-parked {
+  position: fixed;
+  z-index: 60;
+  gap: 6px;
+  pointer-events: auto;
+}
+.cfn-tool-label { display: none; }
+.cfn-tools-slot.is-parked.is-mobile {
+  position: relative;
+  z-index: 2;
+  top: auto;
+  left: auto;
+  right: auto;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 8px 0 0;
+  padding: 0 8px 8px;
+}
+.cfn-tools-slot.is-mobile {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.cfn-tools-slot.is-mobile button.cfn-tool {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 48px !important;
+  max-height: none !important;
+  flex: none !important;
+  padding: 8px 10px !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 12px;
+  font: 600 13px/1.15 inherit;
+}
+.cfn-tools-slot.is-mobile .cfn-tool-label {
+  display: block;
+  min-width: 0;
+  text-align: left;
+}
+button.cfn-tool {
+  flex: 0 0 32px !important;
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  min-height: 32px !important;
+  max-width: 32px !important;
+  max-height: 32px !important;
+  margin: 0;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: #7c3aed !important;
+  color: #fff !important;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+button.cfn-tool:hover {
+  background: #6d28d9 !important;
+}
+button.cfn-tool .cfn-glyph,
+button.cfn-tool svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  pointer-events: none;
+}
+button.cfn-tool path {
+  fill: #fff !important;
+  stroke: none;
 }
 .cfn-tool[hidden] {
   display: none !important;

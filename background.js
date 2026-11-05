@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS = {
   hideOpponent: false,
   blunderAlerts: false,
   engineId: "stockfish-lite",
+  analysisDepth: 12,
 };
 
 // ---------- storage helpers ----------
@@ -90,6 +91,7 @@ async function resolveUser(username, userCache) {
 
 // Server-sent events stream: emits the current presence of every requested id, then updates.
 // We read the initial snapshot and close the connection.
+// Must send Chess.com cookies + Origin (via rules.json) or Cloudflare returns 403.
 async function fetchPresence(uuids) {
   const result = {};
   if (!uuids.length) return result;
@@ -99,7 +101,14 @@ async function fetchPresence(uuids) {
   try {
     const res = await fetch(
       `${BASE}/service/presence/watch/users?ids=${uuids.join(",")}`,
-      { signal: controller.signal, headers: { Accept: "text/event-stream" } }
+      {
+        signal: controller.signal,
+        credentials: "include",
+        headers: {
+          Accept: "text/event-stream",
+          "Cache-Control": "no-cache",
+        },
+      }
     );
     if (!res.ok || !res.body) throw new Error(`Presence request failed (${res.status})`);
 
@@ -900,12 +909,28 @@ async function runCheck({ forceStats = false } = {}) {
     });
 
     const presence = {};
+    let presenceOk = false;
+    let presenceErr = null;
     await Promise.all(
       Array.from({ length: Math.ceil(friends.length / PRESENCE_BATCH) || 0 }, (_, i) => {
         const batch = friends.slice(i * PRESENCE_BATCH, i * PRESENCE_BATCH + PRESENCE_BATCH).map((f) => f.uuid);
-        return fetchPresence(batch).then((part) => Object.assign(presence, part));
+        return fetchPresence(batch)
+          .then((part) => {
+            Object.assign(presence, part);
+            if (Object.keys(part).length) presenceOk = true;
+          })
+          .catch((err) => {
+            presenceErr = err;
+            console.warn("Presence batch failed", err);
+          });
       })
     );
+    if (presenceErr && !presenceOk && !Object.keys(presence).length) {
+      // Still stamp lastCheck so Refresh does not look stuck on a hours-old snapshot,
+      // but keep prior statuses when Cloudflare/presence is down.
+      await chrome.storage.local.set({ lastCheck: Date.now() });
+      throw presenceErr;
+    }
 
     const statuses = {};
     const newPending = [];
@@ -1021,6 +1046,13 @@ const ENGINES = {
 
 function selectedEngine(settings) {
   return ENGINES[settings?.engineId] || ENGINES["stockfish-lite"];
+}
+
+const ANALYSIS_DEPTHS = [12, 14, 16, 18, 20, 22, 24];
+
+function analysisDepthOf(value) {
+  const depth = Number(value);
+  return ANALYSIS_DEPTHS.includes(depth) ? depth : 12;
 }
 
 async function lichessCloudEval(fen) {
@@ -1164,7 +1196,7 @@ async function withPlayerDetails(session) {
   };
 }
 
-async function analyzeGame(gameId, kind, tabId) {
+async function analyzeGame(gameId, kind, tabId, choice = {}) {
   const game = await fetchGameForReview(gameId, kind);
   const headers = game.pgnHeaders || {};
   if (!game.isFinished) {
@@ -1174,6 +1206,9 @@ async function analyzeGame(gameId, kind, tabId) {
     };
   }
   if (!game.moveList) return { ok: false, error: "No moves to analyze yet." };
+  const settings = await getSettings();
+  const engine = ENGINES[choice.engineId] || selectedEngine(settings);
+  const depth = analysisDepthOf(choice.depth ?? settings.analysisDepth);
   await ensureOffscreen();
   const result = await chrome.runtime.sendMessage({
     target: "offscreen",
@@ -1183,6 +1218,9 @@ async function analyzeGame(gameId, kind, tabId) {
       gameId,
       moveList: game.moveList,
       finished: !!game.isFinished,
+      engineId: engine.id,
+      depth,
+      fresh: !!choice.fresh,
       players: {
         w: { name: headers.White || "White", rating: headers.WhiteElo || null },
         b: { name: headers.Black || "Black", rating: headers.BlackElo || null },
@@ -1357,7 +1395,7 @@ async function injectIntoOpenTabs() {
     try {
       await chrome.scripting.insertCSS({
         target: { tabId: tab.id },
-        files: ["evalbar.css", "toolbar.css", "pip.css", "timewarn.css", "review.css"],
+        files: ["evalbar.css", "toolbar.css", "pip.css", "timewarn.css", "hideopponent.css", "review.css"],
       });
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["search-main.js"], world: "MAIN" });
       await chrome.scripting.executeScript({
@@ -1369,6 +1407,7 @@ async function injectIntoOpenTabs() {
           "toolbar.js",
           "pip.js",
           "timewarn.js",
+          "hideopponent.js",
           "review.js",
         ],
       });
@@ -1729,7 +1768,7 @@ const handlers = {
   },
   async analyzeGame(msg, sender) {
     try {
-      return await analyzeGame(msg.gameId, msg.kind, sender.tab?.id);
+      return await analyzeGame(msg.gameId, msg.kind, sender.tab?.id, msg);
     } catch (err) {
       return { ok: false, error: err.message };
     }

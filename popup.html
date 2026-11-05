@@ -139,6 +139,19 @@
         </select>
         <span class="field-hint">Listed strongest first. Lichess Cloud is Stockfish at high depth and needs internet. The two Stockfish 19 options run on this computer. Full Leela and the large Stockfish networks are too big to include here.</span>
       </label>
+      <label class="field">
+        <span class="field-label spaced">Analysis depth</span>
+        <select id="analysisDepth">
+          <option value="12">12 — fastest</option>
+          <option value="14">14</option>
+          <option value="16">16</option>
+          <option value="18">18</option>
+          <option value="20">20</option>
+          <option value="22">22</option>
+          <option value="24">24 — slowest</option>
+        </select>
+        <span class="field-hint">Game review searches every move to this depth with the engine above. Higher depth finds more mistakes and takes longer. Lichess Cloud is used when its stored eval is already at least this deep.</span>
+      </label>
       <label class="switch-row">
         <span>
           <span class="switch-label">Best move</span>
@@ -156,7 +169,7 @@
       <label class="switch-row">
         <span>
           <span class="switch-label">Hide Opponent Details</span>
-          <span class="field-hint">Hide opponent names and ratings.</span>
+          <span class="field-hint">Blur the opponent's name, rating, flag, and avatar. Clocks stay visible.</span>
         </span>
         <input id="hideOpponent" type="checkbox" class="switch" />
       </label>

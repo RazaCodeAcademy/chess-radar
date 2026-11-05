@@ -100,6 +100,44 @@
   background: #3b1764;
   color: #e9d5ff;
 }
+#cfn-review .cfn-rv-setup {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid #3c3a37;
+  background: #1f1e1b;
+}
+#cfn-review .cfn-rv-setup label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  color: #a7a6a2;
+  font-size: 11px;
+  font-weight: 650;
+}
+#cfn-review .cfn-rv-setup select {
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid #4a4744;
+  border-radius: 8px;
+  background: #1a1917;
+  color: #e8e6e3;
+  font: inherit;
+}
+#cfn-review .cfn-rv-setup select:focus {
+  border-color: #c084fc;
+  outline: none;
+}
+#cfn-review .cfn-rv-setup .cfn-rv-primary {
+  grid-column: 1 / -1;
+}
+#cfn-review .cfn-rv-setup button:disabled,
+#cfn-review .cfn-rv-setup select:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 #cfn-review .cfn-rv-intro {
   margin: 0 0 12px;
   color: #c3c2bf;

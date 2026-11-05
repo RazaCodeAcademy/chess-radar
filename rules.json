@@ -55,5 +55,20 @@
       "urlFilter": "callback/friends",
       "resourceTypes": ["xmlhttprequest", "other"]
     }
+  },
+  {
+    "id": 5,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "origin", "operation": "set", "value": "https://www.chess.com" },
+        { "header": "referer", "operation": "set", "value": "https://www.chess.com/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "|https://www.chess.com/service/presence/",
+      "resourceTypes": ["xmlhttprequest", "other"]
+    }
   }
 ]

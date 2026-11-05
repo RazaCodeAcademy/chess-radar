@@ -40,6 +40,27 @@
         <button class="cfn-rv-close" type="button" title="Close">×</button>
       </header>
       <div class="cfn-rv-body"></div>
+      <div class="cfn-rv-setup" hidden>
+        <label>Engine
+          <select data-review="engine">
+            <option value="lichess-cloud">Lichess Cloud — strongest</option>
+            <option value="stockfish-deep">Stockfish 19 deep</option>
+            <option value="stockfish-lite">Stockfish 19 lite — fastest</option>
+          </select>
+        </label>
+        <label>Depth
+          <select data-review="depth">
+            <option value="12">12 — fastest</option>
+            <option value="14">14</option>
+            <option value="16">16</option>
+            <option value="18">18</option>
+            <option value="20">20</option>
+            <option value="22">22</option>
+            <option value="24">24 — slowest</option>
+          </select>
+        </label>
+        <button class="cfn-rv-primary" data-action="analyze" data-fresh="1" type="button">Analyze again</button>
+      </div>
       <footer class="cfn-rv-nav" hidden>
         <button data-nav="start" type="button" title="Start">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2.2v14H6V5zm3.2 7 9.3 6.2V5.8L9.2 12z"/></svg>
@@ -63,30 +84,51 @@
   const panel = root.querySelector(".cfn-rv-panel");
   const body = root.querySelector(".cfn-rv-body");
   const nav = root.querySelector(".cfn-rv-nav");
+  const setup = root.querySelector(".cfn-rv-setup");
+  const engineSelect = setup.querySelector("[data-review='engine']");
+  const depthSelect = setup.querySelector("[data-review='depth']");
+  const againBtn = setup.querySelector("[data-action='analyze']");
+  const ANALYSIS_DEPTHS = [12, 14, 16, 18, 20, 22, 24];
   let cursor = 0;
   let playing = false;
   let playTimer = null;
 
   function openAnalyze() {
     const game = currentGame();
-    if (!game) return;
-    if (!gameIsFinished(game)) {
-      // Icon stays visible during live games; analysis starts after the game ends.
-      return;
-    }
+    if (!game || ownLiveGame()) return;
+    if (!gameIsFinished(game)) return;
     open = true;
     if (state.status === "idle") runAnalysis();
     sync();
   }
 
+  function boardPlayers() {
+    return [...document.querySelectorAll(
+      "#board-layout-player-top a[href*='/member/'], #board-layout-player-bottom a[href*='/member/'], #board-layout-player-top .cc-user-username-component, #board-layout-player-bottom .cc-user-username-component"
+    )].map((el) => {
+      const href = el.getAttribute?.("href") || "";
+      const fromHref = href.match(/\/member\/([^/?#]+)/)?.[1];
+      return norm(fromHref || el.textContent);
+    }).filter(Boolean);
+  }
+
+  // The logged-in player's own live board has Resign. Spectating a friend does not.
+  function ownLiveGame() {
+    if (looksFinished()) return false;
+    if (looksLivePlaying()) return true;
+    const me = norm(settings.username);
+    const game = currentGame();
+    if (!me || !game || gameIsFinished(game)) return false;
+    return boardPlayers().includes(me);
+  }
+
   function registerAnalyzeTool() {
     const game = currentGame();
-    // Show in the control bar during live play and after the game ends.
     const onBoard =
       !!game ||
       /\/(?:game|play\/|analysis\/game)/.test(location.pathname) ||
       !!document.querySelector("wc-chess-board, chess-board");
-    const visible = !!(settings.analyzeGame && onBoard && !open);
+    const visible = !!(settings.analyzeGame && onBoard && !open && !ownLiveGame());
     window.__cfnTools?.upsert({
       id: "analyze",
       label: "Analyze Game",
@@ -102,11 +144,13 @@
 
   chrome.storage.local.get("settings").then(({ settings: s = {} }) => {
     settings = { ...settings, ...s };
+    applyAnalysisSettings();
     sync();
   });
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.settings) {
       settings = { ...settings, ...changes.settings.newValue };
+      applyAnalysisSettings();
       sync();
     }
   });
@@ -217,7 +261,40 @@
     }
     panel.hidden = !open;
     nav.hidden = !open || state.status !== "done" || !!puzzle;
+    fillAnalysisControls();
     publish();
+  }
+
+  function analysisDepth() {
+    const depth = Number(depthSelect.value);
+    return ANALYSIS_DEPTHS.includes(depth) ? depth : 12;
+  }
+
+  function applyAnalysisSettings() {
+    const engine = ["lichess-cloud", "stockfish-deep", "stockfish-lite"].includes(settings.engineId)
+      ? settings.engineId
+      : "stockfish-lite";
+    const depth = ANALYSIS_DEPTHS.includes(Number(settings.analysisDepth)) ? String(settings.analysisDepth) : "12";
+    engineSelect.value = engine;
+    depthSelect.value = depth;
+  }
+
+  function fillAnalysisControls() {
+    const busy = state.status === "running";
+    engineSelect.disabled = busy;
+    depthSelect.disabled = busy;
+    againBtn.disabled = busy;
+    againBtn.textContent = busy ? "Analyzing…" : "Analyze again";
+    setup.hidden = !open || !!puzzle;
+  }
+
+  function rememberAnalysisChoice() {
+    settings = { ...settings, engineId: engineSelect.value, analysisDepth: analysisDepth() };
+    chrome.storage.local.get("settings").then(({ settings: saved = {} }) => {
+      chrome.storage.local.set({
+        settings: { ...saved, engineId: settings.engineId, analysisDepth: settings.analysisDepth },
+      });
+    });
   }
 
   // While the review is open, evalbar.js draws the best move for whichever reviewed position is on the board.
@@ -324,17 +401,28 @@
     }, 700);
   }
 
-  async function runAnalysis() {
+  async function runAnalysis(fresh = false) {
     const game = currentGame();
-    if (!game) return;
+    if (!game || ownLiveGame() || state.status === "running") return;
     const key = game.key;
-    state = { status: "running", done: 0, total: 0 };
+    const engineId = engineSelect.value;
+    const depth = analysisDepth();
+    rememberAnalysisChoice();
+    state = { status: "running", done: 0, total: 0, depth };
     cursor = 0;
     stopPlay();
     render();
+    fillAnalysisControls();
     let res;
     try {
-      res = await chrome.runtime.sendMessage({ type: "analyzeGame", gameId: game.id, kind: game.kind });
+      res = await chrome.runtime.sendMessage({
+        type: "analyzeGame",
+        gameId: game.id,
+        kind: game.kind,
+        engineId,
+        depth,
+        fresh: !!fresh,
+      });
     } catch {
       res = { ok: false, error: "The extension was reloaded. Refresh this page and try again." };
     }
@@ -354,11 +442,11 @@
     clearStageTimer();
     if (state.status === "idle") {
       body.innerHTML = `
-        <p class="cfn-rv-intro">Stockfish checks every move and grades both players: accuracy, best moves, mistakes and blunders.</p>
+        <p class="cfn-rv-intro">The engine and depth below are used for every move. Higher depth finds more mistakes and takes longer.</p>
         <button class="cfn-rv-primary" data-action="analyze" type="button">Start review</button>`;
     } else if (state.status === "running") {
       body.innerHTML = `
-        <p class="cfn-rv-intro">Analyzing moves…</p>
+        <p class="cfn-rv-intro">Analyzing every move at depth ${state.depth || analysisDepth()}…</p>
         <div class="cfn-rv-progress"><div></div></div>
         <p class="cfn-rv-progress-text"></p>`;
       renderProgress();
@@ -385,6 +473,7 @@
       }
     }
     publish();
+    fillAnalysisControls();
   }
 
   function renderProgress() {
@@ -1607,7 +1696,7 @@
       return;
     }
     if (e.target.closest("[data-action='analyze']")) {
-      runAnalysis();
+      runAnalysis(!!e.target.closest("[data-fresh='1']"));
       return;
     }
     if (e.target.closest("[data-action='puzzles']")) {
