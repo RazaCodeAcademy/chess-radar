@@ -1,0 +1,7 @@
+/* Opponent identity on the board. Clocks stay sharp. */
+.cfn-hide-opponent {
+  filter: blur(8px) !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  pointer-events: none !important;
+}

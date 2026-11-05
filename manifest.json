@@ -92,6 +92,12 @@
     },
     {
       "matches": ["https://www.chess.com/*"],
+      "js": ["hideopponent.js"],
+      "css": ["hideopponent.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.chess.com/*"],
       "js": ["playsession.js"],
       "css": ["playsession.css"],
       "run_at": "document_idle"

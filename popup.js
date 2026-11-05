@@ -23,6 +23,7 @@ function applySettings(saved = {}) {
     timeWarning: true,
     followNextGame: true,
     engineId: "stockfish-lite",
+    analysisDepth: 12,
     ...saved,
     watchedPlayers: saved.watchedPlayers || saved.manualFriends || [],
     hiddenPlayers: saved.hiddenPlayers || [],
@@ -45,6 +46,7 @@ function fillSettingsForm() {
   if ($("timeWarning")) $("timeWarning").checked = settings.timeWarning !== false;
   $("followNextGame").checked = settings.followNextGame;
   if ($("engineId")) $("engineId").value = settings.engineId || "stockfish-lite";
+  if ($("analysisDepth")) $("analysisDepth").value = String(settings.analysisDepth || 12);
   for (const box of $("timeclasses").querySelectorAll("input")) {
     box.checked = settings.timeclasses[box.value] !== false;
   }
@@ -570,6 +572,7 @@ $("save").onclick = async () => {
   settings.timeWarning = !!$("timeWarning").checked;
   settings.followNextGame = $("followNextGame").checked;
   settings.engineId = $("engineId").value;
+  settings.analysisDepth = Number($("analysisDepth").value) || 12;
   settings.tiltLimit = Number($("tiltLimit").value);
   for (const box of $("timeclasses").querySelectorAll("input")) {
     settings.timeclasses[box.value] = box.checked;

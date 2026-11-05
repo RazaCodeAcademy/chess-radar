@@ -1,7 +1,7 @@
 #cfn-timewarn {
   display: none;
-  position: fixed;
-  z-index: 2147483000;
+  position: absolute;
+  z-index: -1;
   pointer-events: none;
   border-radius: 8px;
   box-sizing: border-box;

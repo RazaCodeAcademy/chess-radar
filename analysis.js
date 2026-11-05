@@ -4,8 +4,8 @@ import { decodeTcn } from "./lib/tcn.js";
 import { buildInsights, legalContinuation } from "./lib/insights.js";
 import { beginAnalysis, endAnalysis, engineSearch } from "./engine-host.js";
 
-const SEARCH = "go depth 12 movetime 800";
 const MATE_CP = 10000;
+const ANALYSIS_DEPTHS = [12, 14, 16, 18, 20, 22, 24];
 const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 
 const CLASSES = [
@@ -37,14 +37,43 @@ function isBrilliantSacrifice(fenBefore, move) {
 let currentRun = 0;
 const cache = new Map();
 
-async function search(fen) {
-  try {
-    return await engineSearch(fen, SEARCH, { kind: "analysis" });
-  } catch (err) {
+function analysisDepthOf(value) {
+  const depth = Number(value);
+  return ANALYSIS_DEPTHS.includes(depth) ? depth : 12;
+}
+
+function analysisTimeout(depth) {
+  return 20000 + Math.max(0, depth - 12) * 8000;
+}
+
+// Lichess scores are from White's side. The local engine scores from the side to move.
+async function searchCloud(fen) {
+  const res = await fetch(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}&multiPv=1`, {
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const pv = data?.pvs?.[0];
+  if (!pv) return null;
+  const moves = String(pv.moves || "").trim().split(/\s+/).filter(Boolean);
+  const sign = fen.split(" ")[1] === "b" ? -1 : 1;
+  return {
+    depth: data.depth || 0,
+    cp: pv.cp == null ? null : pv.cp * sign,
+    mate: pv.mate == null ? null : pv.mate * sign,
+    bestmove: moves[0] || null,
+    pv: moves,
+  };
+}
+
+function searchLocal(fen, depth) {
+  const command = `go depth ${depth}`;
+  const timeout = analysisTimeout(depth);
+  const run = () => engineSearch(fen, command, { kind: "analysis", timeout });
+  return run().catch((err) => {
     if (String(err?.message || "").includes("replaced")) throw err;
-    // The worker is replaced after a crash. One retry covers a single unreachable abort.
-    return engineSearch(fen, SEARCH, { kind: "analysis" });
-  }
+    return run();
+  });
 }
 
 // Centipawns from White's point of view, with mates mapped to large values.
@@ -70,7 +99,7 @@ function sanOf(fen, uci) {
   }
 }
 
-async function evaluatePosition(fen, board) {
+async function evaluatePosition(fen, board, search) {
   const turn = board.turn();
   if (board.isCheckmate()) return { cp: turn === "w" ? -MATE_CP : MATE_CP, bestmove: null, mate: null, matedSide: turn };
   if (board.isDraw() || board.isStalemate()) return { cp: 0, bestmove: null, mate: null };
@@ -82,9 +111,25 @@ async function evaluatePosition(fen, board) {
 // Piece placement + side to move: what the page's board can be matched on.
 const positionKey = (fen) => fen.split(" ").slice(0, 2).join(" ");
 
-async function analyze({ gameId, moveList, finished, players }, onProgress) {
-  const key = `v4:${gameId}:${moveList.length}`;
-  if (finished && cache.has(key)) return cache.get(key);
+async function analyze({ gameId, moveList, finished, players, engineId, depth: requestedDepth, fresh }, onProgress) {
+  const depth = analysisDepthOf(requestedDepth);
+  const engine = engineId === "lichess-cloud" || engineId === "stockfish-deep" || engineId === "stockfish-lite"
+    ? engineId
+    : "stockfish-lite";
+  const key = `v5:${gameId}:${moveList.length}:${engine}:${depth}`;
+  if (finished && !fresh && cache.has(key)) return cache.get(key);
+
+  async function search(fen) {
+    if (engine === "lichess-cloud") {
+      try {
+        const cloud = await searchCloud(fen);
+        if (cloud && cloud.depth >= depth) return cloud;
+      } catch {
+        // A missing cloud position is searched locally at the selected depth.
+      }
+    }
+    return searchLocal(fen, depth);
+  }
 
   const run = ++currentRun;
   beginAnalysis();
@@ -113,7 +158,7 @@ async function analyze({ gameId, moveList, finished, players }, onProgress) {
   for (let i = 0; i < positions.length; i++) {
     if (run !== currentRun) throw new Error("Analysis was replaced by a newer request.");
     if (i > 0) replay.move(moves[i - 1].san);
-    evals.push(await evaluatePosition(positions[i].fen, replay));
+    evals.push(await evaluatePosition(positions[i].fen, replay, search));
     onProgress(i + 1, positions.length);
   }
 
@@ -161,6 +206,8 @@ async function analyze({ gameId, moveList, finished, players }, onProgress) {
     ok: true,
     gameId,
     finished,
+    engineId: engine,
+    depth,
     white: summary("w"),
     black: summary("b"),
     evals: evals.map((e) => e.cp),

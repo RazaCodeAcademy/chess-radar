@@ -1,6 +1,6 @@
 // Visual Time Warning: glowing board border when you're up or down on the clock.
-// Uses position:fixed against the viewport so it still shows in Focus / Theatre mode
-// and inside Document PiP.
+// On a normal game the ring sits behind the board. In Focus / Theatre mode
+// and inside Document PiP it is pinned to the viewport so it stays visible.
 (() => {
   window.__cfnTimeWarnStop?.();
   for (const d of [document]) {
@@ -21,6 +21,7 @@
   let raf = 0;
   let ring = null;
   let ringDoc = null;
+  let hostWePositioned = null;
 
   chrome.storage.local.get("settings").then(({ settings: s = {} }) => {
     settings = { ...settings, ...s };
@@ -192,15 +193,20 @@
     };
   }
 
+  function releaseHost() {
+    if (!hostWePositioned) return;
+    hostWePositioned.style.position = "";
+    hostWePositioned = null;
+  }
+
   function ensureRing(doc) {
     if (!ring || ringDoc !== doc || !ring.isConnected) {
+      releaseHost();
       ring?.remove?.();
       ring = doc.createElement("div");
       ring.id = "cfn-timewarn";
       ring.setAttribute("aria-hidden", "true");
       ringDoc = doc;
-      (doc.body || doc.documentElement).append(ring);
-    } else if (ring.parentElement !== doc.body && ring.parentElement !== doc.documentElement) {
       (doc.body || doc.documentElement).append(ring);
     }
     return ring;
@@ -212,7 +218,48 @@
     ring.style.display = "none";
   }
 
-  function paint(el, rect, mode, urgent) {
+  function overlayMode(doc, board) {
+    if (doc !== document || document.fullscreenElement) return true;
+    const labeled = `${document.documentElement.className} ${document.body?.className || ""}`;
+    if (/\b(?:focus-mode|theatre-mode|theater-mode)\b/i.test(labeled)) return true;
+    if (board.closest("[class*='focus-mode'], [class*='theatre'], [class*='theater']")) return true;
+    let el = board;
+    while (el && el !== document.body) {
+      if (getComputedStyle(el).position === "fixed") return true;
+      el = el.parentElement;
+    }
+    return false;
+  }
+
+  // Sit in the board's parent, under the board itself, so clocks, popups,
+  // and the rest of the page paint over the glow.
+  function placeBehind(board, rect) {
+    const host = board.parentElement;
+    if (!host) return false;
+    if (ring.parentElement !== host) host.prepend(ring);
+    if (hostWePositioned && hostWePositioned !== host) releaseHost();
+    if (!hostWePositioned && getComputedStyle(host).position === "static") {
+      host.style.position = "relative";
+      hostWePositioned = host;
+    }
+    const origin = host.getBoundingClientRect();
+    Object.assign(ring.style, {
+      display: "block",
+      position: "absolute",
+      left: `${Math.round(rect.left - origin.left) - 5}px`,
+      top: `${Math.round(rect.top - origin.top) - 5}px`,
+      width: `${Math.round(rect.size) + 10}px`,
+      height: `${Math.round(rect.size) + 10}px`,
+      zIndex: "-1",
+      pointerEvents: "none",
+    });
+    return true;
+  }
+
+  function placeOverlay(el, rect) {
+    releaseHost();
+    const parent = (ringDoc && (ringDoc.body || ringDoc.documentElement)) || document.body;
+    if (el.parentElement !== parent) parent.append(el);
     Object.assign(el.style, {
       display: "block",
       position: "fixed",
@@ -223,6 +270,11 @@
       zIndex: "2147483000",
       pointerEvents: "none",
     });
+  }
+
+  function paint(doc, board, rect, mode, urgent) {
+    const el = ensureRing(doc);
+    if (overlayMode(doc, board) || !placeBehind(board, rect)) placeOverlay(el, rect);
     el.className = `is-on is-${mode}${urgent ? " is-urgent" : ""}`;
   }
 
@@ -264,7 +316,7 @@
     else if (diff < -EVEN_MS) mode = "down";
     const urgent = mine <= URGENT_MS || (mode === "down" && Math.abs(diff) >= 15000);
 
-    paint(ensureRing(doc), rect, mode, urgent);
+    paint(doc, board, rect, mode, urgent);
   }
 
   function loop() {
@@ -307,6 +359,7 @@
     clearTimeout(moTimer);
     mo?.disconnect?.();
     hide();
+    releaseHost();
     ring?.remove?.();
     ring = null;
     ringDoc = null;

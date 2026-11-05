@@ -4,12 +4,10 @@
   window.__cfnToolsStop?.();
   document.querySelectorAll("#cfn-tools, #cfn-tools-slot, .cfn-tool, #cfn-tool-tip").forEach((el) => el.remove());
 
-  const NATIVE_BTN_CLASSES = [
-    "cc-icon-button-component",
-    "cc-icon-button-small",
-    "cc-icon-button-ghost",
-    "cc-bg-ghost",
-  ];
+  let writing = false;
+  let watchId = 0;
+  const generation = (window.__cfnToolsGen || 0) + 1;
+  window.__cfnToolsGen = generation;
 
   const tip = document.createElement("div");
   tip.id = "cfn-tool-tip";
@@ -26,7 +24,13 @@
   let tipBtn = null;
 
   function isOurs(el) {
-    return !!(el && (el.classList?.contains("cfn-tool") || el.id === "cfn-tool-tip"));
+    return !!(
+      el &&
+      (el.classList?.contains("cfn-tool") ||
+        el.classList?.contains("cfn-tools-slot") ||
+        el.id === "cfn-tool-tip" ||
+        el.id === "cfn-tools-slot")
+    );
   }
 
   function deepQueryAll(selector, root = document) {
@@ -65,37 +69,76 @@
     return null;
   }
 
+  function tabLabel(el) {
+    return (el?.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  // Analysis / New Game / Games / Players. Not the board icon row.
+  function tabBar() {
+    const buttons = deepQueryAll("button");
+    const analysis = buttons.find((el) => tabLabel(el) === "analysis");
+    const other = buttons.find((el) => /^(new game|games|players)$/.test(tabLabel(el)));
+    if (!analysis || !other) return null;
+    return commonAncestor(analysis, other);
+  }
+
+  function isTabChrome(el, tabs = tabBar()) {
+    if (!el || !tabs) return false;
+    return el === tabs || tabs.contains(el);
+  }
+
+  function holdsTabs(el) {
+    if (!el?.querySelectorAll) return false;
+    let analysis = false;
+    let other = false;
+    for (const button of el.querySelectorAll("button")) {
+      const label = tabLabel(button);
+      if (label === "analysis") analysis = true;
+      if (label === "new game" || label === "games" || label === "players") other = true;
+    }
+    return analysis && other;
+  }
+
+  function rowVisible(el) {
+    if (!el?.isConnected) return false;
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 70 && r.height >= 28 && r.bottom > 0 && r.top < window.innerHeight;
+  }
+
   function findControlBar() {
-    const share = findByLabel(/share/);
-    const add = findByLabel(/add to|library|collection|bookmark/);
+    const tabs = tabBar();
+    const share = deepQueryAll("button").find((el) => /share/.test(btnLabel(el)) && !isTabChrome(el, tabs));
     const flip =
       document.getElementById("board-controls-flip") ||
-      findByLabel(/flip board|flip/);
-    const rematch = findByLabel(/rematch|new game|resign/);
+      deepQueryAll("button").find((el) => /flip board|^flip$/.test(btnLabel(el)) && !isTabChrome(el, tabs));
+    const rematch = deepQueryAll("button").find(
+      (el) => /rematch|resign/.test(btnLabel(el)) && !isTabChrome(el, tabs)
+    );
+
+    const accept = (group, sample) => {
+      if (!group || isTabChrome(group, tabs) || holdsTabs(group) || !rowVisible(group)) return null;
+      return { group, sample };
+    };
+
+    const iconRows = deepQueryAll(
+      ".game-icons-container-component, [class*='game-icons-container'], .board-controls-component"
+    );
+    const nearShare = share?.closest?.(
+      ".game-icons-container-component, [class*='game-icons-container'], .board-controls-component"
+    );
+    for (const row of [nearShare, ...iconRows]) {
+      const hit = accept(row, share || flip);
+      if (hit) return hit;
+    }
 
     const container =
-      deepQueryAll(".game-icons-container-component")[0] ||
-      deepQueryAll("[class*='game-icons-container']")[0] ||
-      deepQueryAll(".board-controls-component")[0] ||
       (share && flip ? commonAncestor(share, flip) : null) ||
       (share && rematch ? commonAncestor(share, rematch) : null) ||
       share?.closest?.("[class*='icons'], [class*='controls']") ||
       null;
 
-    if (share?.parentElement) {
-      const group = share.parentElement;
-      const natives = [...group.children].filter((el) => el.tagName === "BUTTON" && !isOurs(el));
-      const hasFlip = natives.some((b) => /flip/.test(btnLabel(b)));
-      if (!hasFlip || natives.length <= 4) {
-        return {
-          group,
-          sample: natives[0] || share,
-          after: add && natives.includes(add) ? add : natives[natives.length - 1] || share,
-        };
-      }
-    }
-
-    if (container) {
+    if (container && !isTabChrome(container, tabs)) {
       const groups = [...container.querySelectorAll(":scope > *")];
       for (const g of groups) {
         const direct = [...g.children].filter((el) => el.tagName === "BUTTON" && !isOurs(el));
@@ -103,42 +146,20 @@
           ? direct
           : [...g.querySelectorAll("button")].filter((el) => !isOurs(el));
         if (list.some((b) => /share/.test(btnLabel(b)))) {
-          const addBtn = list.find((b) => /add to|library|collection/.test(btnLabel(b)));
-          return {
-            group: direct.length ? g : list[0].parentElement,
-            sample: list[0],
-            after: addBtn || list[list.length - 1],
-          };
+          const hit = accept(direct.length ? g : list[0].parentElement, list[0]);
+          if (hit) return hit;
         }
       }
-
-      const all = [...container.querySelectorAll("button")].filter((el) => !isOurs(el));
-      if (all.length) {
-        const shareBtn = all.find((b) => /share/.test(btnLabel(b))) || all[0];
-        const group = shareBtn.parentElement;
-        const siblings = [...group.children].filter((el) => el.tagName === "BUTTON" && !isOurs(el));
-        return {
-          group,
-          sample: siblings[0] || shareBtn,
-          after:
-            siblings.find((b) => /add to|library|collection/.test(btnLabel(b))) ||
-            siblings[siblings.length - 1] ||
-            shareBtn,
-        };
-      }
+      const hit = accept(share?.parentElement, share);
+      if (hit) return hit;
     }
 
-    if (flip?.parentElement) {
-      const group = flip.parentElement;
-      const natives = [...group.children].filter((el) => el.tagName === "BUTTON" && !isOurs(el));
-      return { group, sample: natives[0] || flip, after: natives[natives.length - 1] || flip };
-    }
-    return null;
+    return accept(flip?.parentElement, flip);
   }
 
   function tipPlacement(btn) {
     const r = btn.getBoundingClientRect();
-    const parent = btn.parentElement?.getBoundingClientRect();
+    const parent = (btn.closest(".cfn-tools-slot")?.parentElement || btn.parentElement)?.getBoundingClientRect();
     const parentWide = !!(parent && parent.width > parent.height * 1.6);
     const nearBottom = r.top > window.innerHeight * 0.55;
     const nearLeftEdge = r.left < 120;
@@ -226,31 +247,12 @@
     btn.addEventListener("click", hideTip);
   }
 
-  function applyNativeButtonClasses(btn, sample) {
-    const base = [];
-    if (sample?.classList) {
-      for (const c of sample.classList) {
-        if (!c || c === "cfn-tool" || /^(active|selected|hover|open|is-)/i.test(c)) continue;
-        base.push(c);
-      }
-    }
-    for (const c of NATIVE_BTN_CLASSES) {
-      if (!base.includes(c)) base.push(c);
-    }
-    if (!base.includes("cfn-tool")) base.push("cfn-tool");
-    btn.className = base.join(" ");
+  function applyButtonFace(btn) {
+    const next = "cfn-tool";
+    if (btn.className !== next) btn.className = next;
   }
 
-  function glyphSpanClass(sample) {
-    const span =
-      sample?.querySelector?.('span[class*="cc-icon-glyph"], span[class*="cc-icon-size"]') ||
-      document.querySelector('.game-icons-container-component span[class*="cc-icon-glyph"]');
-    return span?.getAttribute("class") || "cc-icon-glyph_a660c4b cc-icon-size-20_a660c4b";
-  }
-
-  // Match Chess.com: <span class="cc-icon-glyph_* cc-icon-size-20_*"><svg data-glyph ...><path d="..."></path></svg></span>
-  function buildIconHtml(tool, sample) {
-    const spanClass = glyphSpanClass(sample);
+  function buildIconHtml(tool) {
     const glyph = tool.glyph || tool.id || "custom";
     let pathD = tool.path || "";
     if (!pathD && tool.icon) {
@@ -258,36 +260,195 @@
       pathD = m?.[1] || "";
     }
     if (!pathD) pathD = "m12 2 0 20";
-    return `<span aria-hidden="true" class="${spanClass}"><svg data-glyph="${glyph}" aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="${pathD}"></path></svg></span>`;
+    return `<span aria-hidden="true" class="cfn-glyph"><svg data-glyph="${glyph}" aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="#ffffff" d="${pathD}"></path></svg></span>`;
+  }
+
+  function orderedButtons() {
+    const preferred = ["pip", "analyze"].map((id) => buttons.get(id)).filter((b) => b && !b.hidden);
+    const rest = [...buttons.values()].filter((b) => !b.hidden && !preferred.includes(b));
+    return [...preferred, ...rest];
+  }
+
+  function removeStrays() {
+    const owned = new Set(buttons.values());
+    for (const el of deepQueryAll("button.cfn-tool, .cfn-tool")) {
+      if (el.tagName !== "BUTTON") continue;
+      if (!owned.has(el)) el.remove();
+    }
+    const slots = deepQueryAll("#cfn-tools-slot, .cfn-tools-slot");
+    const keep = slots.find((el) => el.id === "cfn-tools-slot") || slots[0] || null;
+    for (const el of slots) {
+      if (el !== keep) el.remove();
+    }
+    return keep;
+  }
+
+  function releaseShift() {
+    for (const el of document.querySelectorAll("[data-cfn-shift]")) {
+      el.style.marginTop = "";
+      el.removeAttribute("data-cfn-shift");
+    }
+  }
+
+  function clearPark(slot) {
+    slot.classList.remove("is-parked", "is-mobile");
+    slot.style.position = "";
+    slot.style.top = "";
+    slot.style.left = "";
+    slot.style.right = "";
+    slot.style.width = "";
+    releaseShift();
+  }
+
+  function boardNode() {
+    return (
+      document.querySelector("wc-chess-board, chess-board") ||
+      document.getElementById("board-layout-chessboard")
+    );
+  }
+
+  function boxVisible(el) {
+    if (!el?.isConnected) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 24 && r.height > 14 && r.bottom > 0 && r.top < window.innerHeight;
+  }
+
+  function isMobileLayout(boardRect) {
+    if (window.matchMedia("(max-width: 820px)").matches) return true;
+    const tabs = tabBar()?.getBoundingClientRect();
+    return !!(boardRect && tabs && tabs.top > boardRect.bottom - 12);
+  }
+
+  // The clock above the board. Fall back to any visible clock.
+  function clockBeside(boardRect) {
+    const clocks = deepQueryAll(".clock-component, [class*='clock-component']").filter(boxVisible);
+    const above = clocks.filter((el) => el.getBoundingClientRect().bottom <= boardRect.top + 36);
+    const pool = above.length ? above : clocks;
+    pool.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    return pool[0] || null;
+  }
+
+  function syncLabel(btn, text) {
+    let label = btn.querySelector(".cfn-tool-label");
+    if (!label) {
+      label = document.createElement("span");
+      label.className = "cfn-tool-label";
+      btn.append(label);
+    }
+    if (label.textContent !== text) label.textContent = text;
+  }
+
+  // Desktop: icon buttons immediately left of the clock.
+  // Mobile: labeled buttons in the strip under the name and clock.
+  // The short row of Analysis / New Game / Games / Players, not the whole sidebar.
+  function tabStrip() {
+    const buttons = deepQueryAll("button, [role='tab'], a");
+    const analysis = buttons.find((el) => tabLabel(el) === "analysis");
+    const newer = buttons.find((el) => tabLabel(el) === "new game");
+    if (!analysis || !newer) return null;
+    let strip = analysis;
+    while (strip.parentElement && !strip.contains(newer)) strip = strip.parentElement;
+    while (strip.parentElement) {
+      const parent = strip.parentElement;
+      const stripBox = strip.getBoundingClientRect();
+      const parentBox = parent.getBoundingClientRect();
+      if (parentBox.height > stripBox.height + 48) break;
+      strip = parent;
+    }
+    return strip;
+  }
+
+  function parkMobile(slot) {
+    releaseShift();
+    slot.style.position = "relative";
+    slot.style.top = "auto";
+    slot.style.left = "auto";
+    slot.style.right = "auto";
+    slot.style.width = "100%";
+    slot.style.order = "-1";
+    slot.style.flex = "0 0 auto";
+    slot.style.gridColumn = "1 / -1";
+
+    const strip = tabStrip();
+    const sidebar = document.getElementById("board-layout-sidebar");
+    const player = document.getElementById("board-layout-player-bottom");
+    const sidebarIsBelowPlayer = sidebar && (!player || !sidebar.contains(player));
+    const host = sidebarIsBelowPlayer ? sidebar : strip?.parentElement;
+    if (!host) return;
+    const before = sidebarIsBelowPlayer ? [...host.children].find((el) => el !== slot) || null : strip;
+    if (slot.parentElement !== host || slot.nextElementSibling !== before) host.insertBefore(slot, before);
+
+    if (!strip || strip === slot) return;
+    const overlap = Math.ceil(slot.getBoundingClientRect().bottom - strip.getBoundingClientRect().top);
+    if (overlap > 0) {
+      strip.style.marginTop = `${overlap + 8}px`;
+      strip.dataset.cfnShift = "1";
+    }
+  }
+
+  function park(slot) {
+    const board = boardNode();
+    const r = board?.getBoundingClientRect();
+    const mobile = isMobileLayout(r);
+    slot.classList.add("is-parked");
+    slot.classList.toggle("is-mobile", mobile);
+    if (mobile) {
+      parkMobile(slot);
+      return;
+    }
+
+    releaseShift();
+    if (slot.parentElement !== document.documentElement) document.documentElement.append(slot);
+    slot.style.position = "";
+    slot.style.right = "auto";
+    slot.style.width = "";
+    slot.style.order = "";
+    slot.style.flex = "";
+    slot.style.gridColumn = "";
+
+    if (!r || r.width < 80) {
+      slot.style.top = "72px";
+      slot.style.left = "16px";
+      return;
+    }
+
+    const clock = clockBeside(r);
+    const width = Math.max(slot.offsetWidth, 70);
+    if (clock) {
+      const c = clock.getBoundingClientRect();
+      slot.style.top = `${Math.round(c.top + Math.max(0, (c.height - 32) / 2))}px`;
+      slot.style.left = `${Math.round(Math.max(8, c.left - width - 8))}px`;
+      return;
+    }
+    slot.style.top = `${Math.round(Math.max(8, r.top - 40))}px`;
+    slot.style.left = `${Math.round(r.left + r.width / 2 - width - 8)}px`;
   }
 
   function ensureMounted() {
-    if (![...tools.values()].some((t) => t.visible)) {
-      for (const btn of buttons.values()) btn.remove();
+    const ordered = orderedButtons();
+    let slot = removeStrays();
+
+    if (!ordered.length) {
+      slot?.remove();
       return false;
     }
 
-    const row = findControlBar();
-    if (!row?.group || !row.after) {
-      for (const btn of buttons.values()) btn.remove();
-      return false;
+    if (!slot) {
+      slot = document.createElement("span");
+      slot.id = "cfn-tools-slot";
+      slot.className = "cfn-tools-slot";
     }
-
-    for (const btn of buttons.values()) applyNativeButtonClasses(btn, row.sample || row.after);
-
-    let anchor = row.after;
-    const visibleBtns = ["pip", "analyze"].map((id) => buttons.get(id)).filter((b) => b && !b.hidden);
-    for (const btn of visibleBtns) {
-      if (btn.parentElement !== row.group || btn.previousElementSibling !== anchor) {
-        anchor.after(btn);
-      }
-      anchor = btn;
+    ordered.forEach((btn, index) => {
+      if (slot.children[index] !== btn) slot.append(btn);
+    });
+    for (const btn of [...slot.children]) {
+      if (!ordered.includes(btn)) btn.remove();
     }
+    park(slot);
     return true;
   }
 
   function ensureButton(tool) {
-    const sample = findControlBar()?.sample;
     let btn = buttons.get(tool.id);
     if (!btn) {
       btn = document.createElement("button");
@@ -301,7 +462,7 @@
       bindTip(btn);
       buttons.set(tool.id, btn);
     }
-    applyNativeButtonClasses(btn, sample);
+    applyButtonFace(btn);
     const text = tool.title || tool.label || tool.id;
     // Same as Chess.com: aria-label only (no title / data-tooltip — those duplicate tips).
     btn.removeAttribute("title");
@@ -310,16 +471,26 @@
     btn.setAttribute("aria-label", text);
     btn.hidden = !tool.visible;
 
-    const spanClass = glyphSpanClass(sample);
-    const iconKey = `${spanClass}|${tool.glyph || tool.id}|${tool.path || tool.icon || ""}`;
+    const iconKey = `${tool.glyph || tool.id}|${tool.path || tool.icon || ""}`;
     if (btn.dataset.iconKey !== iconKey) {
       btn.dataset.iconKey = iconKey;
-      btn.innerHTML = buildIconHtml(tool, sample);
+      btn.innerHTML = buildIconHtml(tool);
     }
+    syncLabel(btn, text);
     return btn;
   }
 
   function render() {
+    if (writing || window.__cfnToolsGen !== generation) return;
+    writing = true;
+    try {
+      renderNow();
+    } finally {
+      writing = false;
+    }
+  }
+
+  function renderNow() {
     const visible = [...tools.values()].filter((t) => t.visible);
     const keep = new Set(visible.map((t) => t.id));
     for (const [id, btn] of buttons) {
@@ -384,31 +555,54 @@
   };
 
   const mo = new MutationObserver((mutations) => {
+    if (writing || window.__cfnToolsGen !== generation) return;
     for (const m of mutations) {
       for (const n of [...m.addedNodes, ...m.removedNodes]) {
-        if (n.nodeType === 1 && isOurs(n)) continue;
+        if (n.nodeType !== 1) continue;
+        if (isOurs(n)) {
+          if (n.tagName === "BUTTON" && n.classList?.contains("cfn-tool") && buttons.get(n.dataset.id) !== n) n.remove();
+          continue;
+        }
         scheduleMount();
         return;
       }
     }
   });
   mo.observe(document.documentElement, { childList: true, subtree: true });
-  window.addEventListener("scroll", hideTip, true);
+  window.addEventListener("scroll", () => {
+    hideTip();
+    const slot = document.getElementById("cfn-tools-slot");
+    if (slot?.classList.contains("is-parked")) park(slot);
+  }, true);
   window.addEventListener("resize", () => {
+    const slot = document.getElementById("cfn-tools-slot");
+    if (slot?.classList.contains("is-parked")) park(slot);
     if (tipBtn) showTip(tipBtn, tipBtn.getAttribute("aria-label") || "");
     else hideTip();
   });
-  setInterval(scheduleMount, 1200);
+  watchId = setInterval(() => {
+    if (window.__cfnToolsGen !== generation) return;
+    const slot = deepQueryAll("#cfn-tools-slot")[0];
+    const extras = deepQueryAll("button.cfn-tool").length > buttons.size;
+    const misplaced = [...buttons.values()].some(
+      (btn) => btn.isConnected && !btn.hidden && btn.parentElement !== slot
+    );
+    if (!slot?.isConnected || extras || misplaced) scheduleMount();
+  }, 1500);
   scheduleMount();
 
   window.__cfnTools = api;
   window.__cfnToolsStop = () => {
+    window.__cfnToolsGen = (window.__cfnToolsGen || generation) + 1;
+    clearInterval(watchId);
     clearTimeout(mountTimer);
     clearTimeout(tipTimer);
     clearTimeout(tipClosing);
     mo.disconnect();
     hideTip();
     tip.remove();
+    releaseShift();
+    for (const el of deepQueryAll("#cfn-tools-slot, .cfn-tools-slot, button.cfn-tool, .cfn-tool")) el.remove();
     for (const btn of buttons.values()) btn.remove();
     tools.clear();
     buttons.clear();

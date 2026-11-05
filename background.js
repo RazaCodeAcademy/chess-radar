@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS = {
   hideOpponent: false,
   blunderAlerts: false,
   engineId: "stockfish-lite",
+  analysisDepth: 12,
 };
 
 // ---------- storage helpers ----------
@@ -1023,6 +1024,13 @@ function selectedEngine(settings) {
   return ENGINES[settings?.engineId] || ENGINES["stockfish-lite"];
 }
 
+const ANALYSIS_DEPTHS = [12, 14, 16, 18, 20, 22, 24];
+
+function analysisDepthOf(value) {
+  const depth = Number(value);
+  return ANALYSIS_DEPTHS.includes(depth) ? depth : 12;
+}
+
 async function lichessCloudEval(fen) {
   const res = await fetch(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}&multiPv=1`, {
     signal: AbortSignal.timeout(4000),
@@ -1164,7 +1172,7 @@ async function withPlayerDetails(session) {
   };
 }
 
-async function analyzeGame(gameId, kind, tabId) {
+async function analyzeGame(gameId, kind, tabId, choice = {}) {
   const game = await fetchGameForReview(gameId, kind);
   const headers = game.pgnHeaders || {};
   if (!game.isFinished) {
@@ -1174,6 +1182,9 @@ async function analyzeGame(gameId, kind, tabId) {
     };
   }
   if (!game.moveList) return { ok: false, error: "No moves to analyze yet." };
+  const settings = await getSettings();
+  const engine = ENGINES[choice.engineId] || selectedEngine(settings);
+  const depth = analysisDepthOf(choice.depth ?? settings.analysisDepth);
   await ensureOffscreen();
   const result = await chrome.runtime.sendMessage({
     target: "offscreen",
@@ -1183,6 +1194,9 @@ async function analyzeGame(gameId, kind, tabId) {
       gameId,
       moveList: game.moveList,
       finished: !!game.isFinished,
+      engineId: engine.id,
+      depth,
+      fresh: !!choice.fresh,
       players: {
         w: { name: headers.White || "White", rating: headers.WhiteElo || null },
         b: { name: headers.Black || "Black", rating: headers.BlackElo || null },
@@ -1357,7 +1371,7 @@ async function injectIntoOpenTabs() {
     try {
       await chrome.scripting.insertCSS({
         target: { tabId: tab.id },
-        files: ["evalbar.css", "toolbar.css", "pip.css", "timewarn.css", "review.css"],
+        files: ["evalbar.css", "toolbar.css", "pip.css", "timewarn.css", "hideopponent.css", "review.css"],
       });
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["search-main.js"], world: "MAIN" });
       await chrome.scripting.executeScript({
@@ -1369,6 +1383,7 @@ async function injectIntoOpenTabs() {
           "toolbar.js",
           "pip.js",
           "timewarn.js",
+          "hideopponent.js",
           "review.js",
         ],
       });
@@ -1729,7 +1744,7 @@ const handlers = {
   },
   async analyzeGame(msg, sender) {
     try {
-      return await analyzeGame(msg.gameId, msg.kind, sender.tab?.id);
+      return await analyzeGame(msg.gameId, msg.kind, sender.tab?.id, msg);
     } catch (err) {
       return { ok: false, error: err.message };
     }
