@@ -91,6 +91,7 @@ async function resolveUser(username, userCache) {
 
 // Server-sent events stream: emits the current presence of every requested id, then updates.
 // We read the initial snapshot and close the connection.
+// Must send Chess.com cookies + Origin (via rules.json) or Cloudflare returns 403.
 async function fetchPresence(uuids) {
   const result = {};
   if (!uuids.length) return result;
@@ -100,7 +101,14 @@ async function fetchPresence(uuids) {
   try {
     const res = await fetch(
       `${BASE}/service/presence/watch/users?ids=${uuids.join(",")}`,
-      { signal: controller.signal, headers: { Accept: "text/event-stream" } }
+      {
+        signal: controller.signal,
+        credentials: "include",
+        headers: {
+          Accept: "text/event-stream",
+          "Cache-Control": "no-cache",
+        },
+      }
     );
     if (!res.ok || !res.body) throw new Error(`Presence request failed (${res.status})`);
 
@@ -901,12 +909,28 @@ async function runCheck({ forceStats = false } = {}) {
     });
 
     const presence = {};
+    let presenceOk = false;
+    let presenceErr = null;
     await Promise.all(
       Array.from({ length: Math.ceil(friends.length / PRESENCE_BATCH) || 0 }, (_, i) => {
         const batch = friends.slice(i * PRESENCE_BATCH, i * PRESENCE_BATCH + PRESENCE_BATCH).map((f) => f.uuid);
-        return fetchPresence(batch).then((part) => Object.assign(presence, part));
+        return fetchPresence(batch)
+          .then((part) => {
+            Object.assign(presence, part);
+            if (Object.keys(part).length) presenceOk = true;
+          })
+          .catch((err) => {
+            presenceErr = err;
+            console.warn("Presence batch failed", err);
+          });
       })
     );
+    if (presenceErr && !presenceOk && !Object.keys(presence).length) {
+      // Still stamp lastCheck so Refresh does not look stuck on a hours-old snapshot,
+      // but keep prior statuses when Cloudflare/presence is down.
+      await chrome.storage.local.set({ lastCheck: Date.now() });
+      throw presenceErr;
+    }
 
     const statuses = {};
     const newPending = [];
