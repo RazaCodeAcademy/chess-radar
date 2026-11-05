@@ -35,6 +35,48 @@
     </div>
   </header>
 
+  <section id="authPanel" class="auth-panel" hidden>
+    <div class="auth-card">
+      <h2 class="auth-title">Sign in to ChessRadar</h2>
+      <p class="auth-sub">Create an account to sync your ChessRadar profile. Chess.com login stays separate.</p>
+      <div class="chip-group auth-tabs" role="tablist">
+        <button id="authTabLogin" class="auth-tab active" type="button" role="tab" aria-selected="true">Login</button>
+        <button id="authTabRegister" class="auth-tab" type="button" role="tab" aria-selected="false">Register</button>
+      </div>
+
+      <form id="loginForm" class="auth-form" autocomplete="on">
+        <label class="field">
+          <span class="field-label">Email or username</span>
+          <input id="loginIdentity" type="text" required autocomplete="username" />
+        </label>
+        <label class="field">
+          <span class="field-label">Password</span>
+          <input id="loginPassword" type="password" required autocomplete="current-password" />
+        </label>
+        <button id="loginBtn" class="save-btn" type="submit">Log in</button>
+      </form>
+
+      <form id="registerForm" class="auth-form" hidden autocomplete="on">
+        <label class="field">
+          <span class="field-label">Email</span>
+          <input id="registerEmail" type="email" required autocomplete="email" />
+        </label>
+        <label class="field">
+          <span class="field-label">Username</span>
+          <input id="registerUsername" type="text" required minlength="3" maxlength="32" autocomplete="username" />
+        </label>
+        <label class="field">
+          <span class="field-label">Password</span>
+          <input id="registerPassword" type="password" required minlength="8" autocomplete="new-password" />
+          <span class="field-hint">At least 8 characters</span>
+        </label>
+        <button id="registerBtn" class="save-btn" type="submit">Create account</button>
+      </form>
+      <p id="authError" class="error" hidden></p>
+    </div>
+  </section>
+
+  <section id="appShell" hidden>
   <section id="homePanel">
     <section id="statsSection" hidden>
       <div id="ratings" class="ratings"></div>
@@ -224,6 +266,12 @@
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-title">ChessRadar account</div>
+      <p id="authAccountLabel" class="field-hint">Not signed in</p>
+      <button id="logoutBtn" class="back-btn" type="button">Log out</button>
+    </div>
+
     <button id="save" class="save-btn" type="button">Save settings</button>
   </section>
 
@@ -253,6 +301,7 @@
       </button>
     </div>
   </footer>
+  </section>
 
   <div id="playSessionPanel" class="friends-pop" hidden>
     <div class="friends-card play-session-card" role="dialog" aria-modal="true" aria-labelledby="playSessionTitle">
@@ -322,6 +371,7 @@
     </div>
   </div>
 
+  <script src="auth.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
