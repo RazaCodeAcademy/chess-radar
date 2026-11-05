@@ -18,7 +18,9 @@
     "https://lichess.org/*",
     "https://explorer.lichess.org/*",
     "https://www.chessdb.cn/*",
-    "https://raw.githubusercontent.com/*"
+    "https://raw.githubusercontent.com/*",
+    "http://localhost:4000/*",
+    "http://127.0.0.1:4000/*"
   ],
   "declarative_net_request": {
     "rule_resources": [{ "id": "chesscom_origin", "enabled": true, "path": "rules.json" }]

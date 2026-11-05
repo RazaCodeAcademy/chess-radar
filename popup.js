@@ -138,11 +138,56 @@ async function renderData() {
   renderStatus();
 }
 
+function setAuthError(msg) {
+  const el = $("authError");
+  if (!el) return;
+  if (!msg) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = msg;
+}
+
+function showAuthMode(mode) {
+  const login = mode === "login";
+  $("loginForm").hidden = !login;
+  $("registerForm").hidden = login;
+  $("authTabLogin").classList.toggle("active", login);
+  $("authTabRegister").classList.toggle("active", !login);
+  $("authTabLogin").setAttribute("aria-selected", String(login));
+  $("authTabRegister").setAttribute("aria-selected", String(!login));
+  setAuthError("");
+}
+
+function setAuthedUi(user) {
+  const signedIn = !!user;
+  $("authPanel").hidden = signedIn;
+  $("appShell").hidden = !signedIn;
+  if ($("header-side") || $("settingsToggle")) {
+    const side = document.querySelector(".header-side");
+    if (side) side.hidden = !signedIn;
+  }
+  if ($("authAccountLabel")) {
+    $("authAccountLabel").textContent = signedIn
+      ? `Signed in as ${user.username} (${user.email})`
+      : "Not signed in";
+  }
+}
+
 async function load() {
   const { settings: saved } = await chrome.storage.local.get("settings");
   applySettings(saved);
   fillSettingsForm();
   syncPsGoalLabel();
+
+  const user = (await window.ChessRadarAuth?.me?.()) || null;
+  setAuthedUi(user);
+  if (!user) {
+    showAuthMode("login");
+    return;
+  }
   await renderData();
 }
 
@@ -1023,7 +1068,69 @@ $("notifToggle").onclick = async () => {
   await chrome.runtime.sendMessage({ type: "setNotifications", enabled: settings.notificationsEnabled });
 };
 
-load().then(() => {
+$("authTabLogin").onclick = () => showAuthMode("login");
+$("authTabRegister").onclick = () => showAuthMode("register");
+
+$("loginForm").onsubmit = async (e) => {
+  e.preventDefault();
+  setAuthError("");
+  const btn = $("loginBtn");
+  btn.disabled = true;
+  btn.textContent = "Signing in…";
+  try {
+    const data = await window.ChessRadarAuth.login({
+      emailOrUsername: $("loginIdentity").value.trim(),
+      password: $("loginPassword").value,
+    });
+    setAuthedUi(data.user);
+    await renderData();
+    if (!settings.username) showSettings(true);
+    scheduleAutoRefresh();
+    refresh();
+  } catch (err) {
+    setAuthError(err.message || "Login failed");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Log in";
+  }
+};
+
+$("registerForm").onsubmit = async (e) => {
+  e.preventDefault();
+  setAuthError("");
+  const btn = $("registerBtn");
+  btn.disabled = true;
+  btn.textContent = "Creating…";
+  try {
+    const data = await window.ChessRadarAuth.register({
+      email: $("registerEmail").value.trim(),
+      username: $("registerUsername").value.trim(),
+      password: $("registerPassword").value,
+    });
+    setAuthedUi(data.user);
+    await renderData();
+    showSettings(true);
+    scheduleAutoRefresh();
+  } catch (err) {
+    setAuthError(err.message || "Registration failed");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Create account";
+  }
+};
+
+$("logoutBtn").onclick = async () => {
+  await window.ChessRadarAuth.logout();
+  setAuthedUi(null);
+  showAuthMode("login");
+  showSettings(false);
+  showFriends(false);
+  showPlaySession(false);
+};
+
+load().then(async () => {
+  const { user } = (await window.ChessRadarAuth?.getSession?.()) || {};
+  if (!user) return;
   if (!settings.username) showSettings(true);
   scheduleAutoRefresh();
   if (Date.now() - lastCheck > intervalMs()) refresh();
